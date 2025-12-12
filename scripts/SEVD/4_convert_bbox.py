@@ -173,7 +173,6 @@ def natural_sort_key(s):
 def create_labels_from_sequence(seq: SequenceDir, args):
     """
     SequenceDir を受け取り、root/labels フォルダ内にラベルnpyを生成
-    args.filter_static がTrueなら静止区間を削除する
     """
     dvs_dir = seq.dvs_dir
     labels_dir = seq.root / "labels"
@@ -187,11 +186,14 @@ def create_labels_from_sequence(seq: SequenceDir, args):
     
     labels_dir.mkdir(parents=True, exist_ok=True)
 
+    # 上書き防止（必要ならコメントアウト）
     if output_path.exists():
         return
 
     gnss_path = seq.gnss_file
     if not gnss_path.exists():
+        # GNSSファイル自体がない場合の警告
+        tqdm.write(f"[Skip] GNSS file missing in: {seq.root}")
         return
 
     # ラベルファイルリスト取得
@@ -202,20 +204,25 @@ def create_labels_from_sequence(seq: SequenceDir, args):
     # 1. GNSS読み込み (同期用)
     frame_map = parse_gnss_timestamps(gnss_path)
     if not frame_map:
+        tqdm.write(f"[Skip] GNSS parsing failed or empty: {seq.root}")
         return
 
     # 2. KITTIラベルパース & リスト化
     all_labels = []
     misc_stats = {'count': 0, 'types': set()}
-    missing_ts_count = 0
+    
+    # 欠落したフレームIDをリストで保持
+    missing_frames = [] 
 
     for txt_file in label_files:
         match = re.search(r"dvs-(\d+)\.txt", txt_file.name)
         if not match: continue
         
         frame_id = int(match.group(1))
+        
+        # GNSSデータにフレームIDが存在するか確認
         if frame_id not in frame_map:
-            missing_ts_count += 1
+            missing_frames.append(frame_id) # ★リストに追加
             continue
             
         ts_us = frame_map[frame_id]
@@ -228,6 +235,10 @@ def create_labels_from_sequence(seq: SequenceDir, args):
                 all_labels.append(label_data)
 
     if not all_labels:
+        # ラベルが見つからなかった、あるいは全てタイムスタンプ欠落だった場合
+        if missing_frames:
+            tqdm.write(f"⚠️  [Error] No valid labels processed in: {seq.root}")
+            _print_debug_info(seq.root, frame_map, missing_frames)
         return
 
     # 3. NumPy配列化
@@ -235,25 +246,17 @@ def create_labels_from_sequence(seq: SequenceDir, args):
     structured_array.sort(order='t')
 
     # ==========================================
-    # ★ フィルタリング処理 (Optional)
+    # ★ フィルタリング処理 (省略・変更なし)
     # ==========================================
     original_count = len(structured_array)
-    
     if args.filter_static:
-        # GNSS軌跡データを読み込み
         gnss_traj = MotionAnalyzer.parse_gnss_trajectory(gnss_path)
-        
         if gnss_traj is not None and len(gnss_traj) > 1:
-            # 静止マスクを作成 (GNSS時間軸)
             static_mask_gnss = MotionAnalyzer.get_static_mask(
                 gnss_traj, args.threshold, args.duration
             )
-            
-            # ラベルの時間軸に補間 (0=Moving, 1=Static)
             label_ts_sec = structured_array['t'].astype(np.float64) / 1e6
             interp_static = np.interp(label_ts_sec, gnss_traj['timestamp'], static_mask_gnss.astype(float))
-            
-            # 0.5以上を静止とみなして削除
             is_static_label = interp_static > 0.5
             structured_array = structured_array[~is_static_label]
 
@@ -264,19 +267,31 @@ def create_labels_from_sequence(seq: SequenceDir, args):
     filtered_count = len(structured_array)
     status_str = "Filtered" if args.filter_static else "Raw"
     
-    msg = f"  ✅ Saved [{status_str}]: {output_path.name} ({filtered_count} labels)"
+    # ★変更点2: 標準出力メッセージを短くし、問題がある時だけ詳細を出す
+    msg = f"Saved: {seq.root.name}/{filename} ({filtered_count} labels)"
     
     if args.filter_static:
         removed = original_count - filtered_count
         if removed > 0:
-            msg += f" [Removed {removed} static]"
+            msg += f" [Rm {removed} static]"
 
-    if misc_stats['count'] > 0:
-        msg += f" (Misc: {misc_stats['count']})"
-    if missing_ts_count > 0:
-        msg += f" [Warn] {missing_ts_count} frames missing timestamps."
+    # 欠落がある場合、詳細なデバッグ情報を表示
+    if missing_frames:
+        tqdm.write(f"\n⚠️  WARNING: Missing Timestamps detected!")
+        _print_debug_info(seq.root, frame_map, missing_frames)
+    else:
+        pass
+
+# デバッグ表示用ヘルパー関数
+def _print_debug_info(root_path, frame_map, missing_frames):
+    gnss_ids = sorted(frame_map.keys())
+    min_gnss, max_gnss = (min(gnss_ids), max(gnss_ids)) if gnss_ids else ("None", "None")
     
-    tqdm.write(msg)
+    tqdm.write(f"  📂 Location : {root_path}")
+    tqdm.write(f"  ❌ Missing  : {len(missing_frames)} frames")
+    tqdm.write(f"  🔍 Details  : First 5 missing IDs -> {missing_frames[:5]} ...")
+    tqdm.write(f"  📡 GNSS Data: Range [{min_gnss} ~ {max_gnss}] (Total {len(gnss_ids)} records)")
+    tqdm.write("-" * 60)
 
 
 # ==========================================
