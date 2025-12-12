@@ -1,0 +1,31 @@
+# 数値計算ライブラリ
+numpy==1.24
+numba
+pandas
+scikit-learn
+
+# 機械学習・ディープラーニング関連
+torch==2.0.0
+torchvision
+torchdata==0.6.0
+lightning
+einops
+wandb==0.14.0
+
+# 設定管理・ユーティリティ
+hydra-core
+omegaconf
+tqdm
+StrEnum
+
+# ファイルフォーマット関連
+h5py
+hdf5plugin
+
+# 画像処理関連
+opencv-python
+bbox_visualizer
+plotly
+
+# データセット関連
+pycocotools

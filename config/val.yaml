@@ -1,0 +1,22 @@
+defaults:
+  - dataset: ???
+  - model: ???
+  - _self_
+
+checkpoint: ???
+use_test_set: True
+
+training:
+  precision: 16
+
+batch_size:
+  eval: 8
+
+hardware:
+  num_workers:
+    eval: 4
+  gpus: 0 
+
+hydra:
+  run:
+    dir: ./outputs/val/${now:%Y-%m-%d}/${now:%H-%M-%S}

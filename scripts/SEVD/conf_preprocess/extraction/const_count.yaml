@@ -1,0 +1,5 @@
+method: COUNT
+## number of events in the event representation
+value: 50000
+## step duration for the event representation
+ts_step_ev_repr_ms: 50 # 50 ms

@@ -1,0 +1,8 @@
+defaults:
+  - general
+  - dataset: ???
+  - model: ???
+  
+hydra:
+  run:
+    dir: ./outputs/train/${now:%Y-%m-%d}/${now:%H-%M-%S}

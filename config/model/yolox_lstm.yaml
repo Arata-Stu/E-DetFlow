@@ -1,0 +1,48 @@
+name: YOLOX_LSTM
+backbone:
+  name: CSPDarknetLSTM
+  input_channels: 20
+  enable_masking: false
+  out_features: [3, 4, 5]
+  depth: 0.33
+  width: 0.25
+  depthwise: False
+  act: "silu"
+  lstm:
+      dws_conv: False
+      dws_conv_only_hidden: True
+      dws_conv_kernel_size: 3
+      drop_cell_update: 0
+  in_res_hw:
+    - 480
+    - 640
+
+fpn:
+  name: PAFPN
+  compile:
+    enable: False
+    args:
+      mode: reduce-overhead
+  depth: 0.33 
+  in_stages: [3, 4, 5]
+  depthwise: False
+  act: "silu"
+  
+head: 
+  detection:  # 検出ヘッド用のセクション
+    name: YoloX
+    compile:
+      enable: False
+      args:
+        mode: reduce-overhead
+    depthwise: False
+    act: "silu"
+    num_classes: 4
+  
+  flow:  # フローヘッド用のセクション
+    name: FlowHead
+    act: "silu"
+
+postprocess:
+  confidence_threshold: 0.1
+  nms_threshold: 0.45

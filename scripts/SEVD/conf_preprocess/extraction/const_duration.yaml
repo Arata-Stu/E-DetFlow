@@ -1,0 +1,5 @@
+method: DURATION
+## duration of the event representation (ms)
+value: 50
+## step duration for the event representation
+ts_step_ev_repr_ms: 50 # 50 ms

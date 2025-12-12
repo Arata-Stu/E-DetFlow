@@ -1,0 +1,11 @@
+train:
+  - sequence_001
+  - sequence_002
+  - sequence_003
+
+val:
+  - sequence_004
+  - sequence_005
+test:
+  - sequence_006
+  - sequence_007
