@@ -6,9 +6,9 @@ import re
 from pathlib import Path
 from tqdm import tqdm
 import numba
+import multiprocessing as mp
 
 from utils.directory import SequenceDir
-
 
 # ==========================================
 # 1. Numba JIT 関数 (ダウンサンプル計算用)
@@ -17,25 +17,19 @@ from utils.directory import SequenceDir
 def _filter_events_resize_jit(x, y, p, mask, change_map, fx, fy):
     """
     JITコンパイルされた積分発火ロジック
-    p は {-1, 1} の符号付き整数または浮動小数点数であること
     """
     for i in range(len(x)):
         x_l = x[i] // fx
         y_l = y[i] // fy
         
-        # 配列外参照ガード
         if y_l >= change_map.shape[0] or x_l >= change_map.shape[1]:
             continue
 
-        # 積分 (Integrate)
-        # p[i]がfloatならそのまま、intならキャストして計算
         change_map[y_l, x_l] += p[i] * 1.0 / (fx * fy)
 
-        # 発火判定 (Fire)
-        # 閾値 1.0 または -1.0 を超えたらイベント通過
         if np.abs(change_map[y_l, x_l]) >= 1:
             mask[i] = True
-            change_map[y_l, x_l] -= p[i] # 残差を残してリセット
+            change_map[y_l, x_l] -= p[i]
 
     return mask
 
@@ -43,36 +37,21 @@ def _filter_events_resize_jit(x, y, p, mask, change_map, fx, fy):
 # 2. ダウンサンプル・ラッパー関数
 # ==========================================
 def apply_downsampling_half(x, y, p, t, width, height):
-    """
-    イベントデータを1/2スケールにダウンサンプルする
-    input:
-      p: bool or {0, 1} array
-    output:
-      x, y, p, t (p is converted back to {0, 1})
-    """
-    fx, fy = 2, 2 # 1/2スケール
+    fx, fy = 2, 2
     out_w = width // fx
     out_h = height // fy
     
-    # マップ初期化
     change_map = np.zeros((out_h, out_w), dtype="float32")
     mask = np.zeros(len(x), dtype="bool")
 
-    # Polarity変換: Boolean/uint8 {0, 1} -> Signed int8 {-1, 1}
-    # True(1) -> 2*1 - 1 = 1
-    # False(0) -> 2*0 - 1 = -1
     p_signed = 2 * p.astype(np.int8) - 1
     
-    # Numba関数呼び出し (p_signed を渡す)
     _filter_events_resize_jit(x, y, p_signed, mask, change_map, fx, fy)
 
-    # マスク適用 & 座標変換
     x_new = (x[mask] // fx).astype(x.dtype)
     y_new = (y[mask] // fy).astype(y.dtype)
     t_new = t[mask]
     
-    # Polarityを {-1, 1} から {0, 1} に戻す
-    # -1 -> 0, 1 -> 1
     p_filtered_signed = p_signed[mask]
     p_new = ((p_filtered_signed + 1) // 2).astype(np.uint8)
 
@@ -86,12 +65,15 @@ def natural_sort_key(s):
             for text in re.split('([0-9]+)', str(s))]
 
 # ==========================================
-# 4. 変換ロジック
+# 4. 変換ロジック (ワーカー用)
 # ==========================================
-def convert_dvs_dir_to_h5(seq: SequenceDir, args):
+def convert_single_sequence(dir_path: Path, args):
     """
-    SequenceDir内のDVSデータを読み込み、必要ならダウンサンプルしてH5保存
+    1つのシーケンスディレクトリを処理する関数
+    マルチプロセスで呼び出されるため、tqdmの表示は最小限にするか、戻り値で制御します。
     """
+    # プロセス内でSequenceDirを初期化 (Pickleエラー回避のためパスで受け取る)
+    seq = SequenceDir(dir_path)
 
     if args.downsample:
         output_filename = "events_ds.h5"
@@ -102,24 +84,19 @@ def convert_dvs_dir_to_h5(seq: SequenceDir, args):
     output_dir = seq.root / "events"
     output_path = output_dir / output_filename
     
+    # スキップ条件
     if not source_dir.exists():
-        return
+        return None 
     if output_path.exists():
-        return
+        return f"Skipped (Exists): {seq.root.name}"
 
     npz_files = sorted(list(source_dir.glob("*.npz")), key=lambda p: natural_sort_key(p.name))
     if not npz_files:
-        return
+        return None
 
-    display_path = f"{seq.root.parent.name}/{seq.root.name}"
-    process_msg = f"Processing: {display_path}"
-    if args.downsample:
-        process_msg += " [Downsampling 1/2]"
-    tqdm.write(process_msg)
-
+    # データ読み込み処理
     all_x, all_y, all_t, all_p = [], [], [], []
 
-    # --- 1. データ読み込み ---
     for file_path in npz_files:
         try:
             with np.load(file_path) as data:
@@ -134,34 +111,27 @@ def convert_dvs_dir_to_h5(seq: SequenceDir, args):
             pass
 
     if not all_x:
-        return
+        return None
 
     x_full = np.concatenate(all_x)
     y_full = np.concatenate(all_y)
     t_full = np.concatenate(all_t)
     p_full = np.concatenate(all_p)
 
-    # --- 2. ダウンサンプル処理 (Optional) ---
+    # ダウンサンプル処理
     if args.downsample:
-        # ダウンサンプル実行
-        # 関数内部で bool -> {-1, 1} 計算 -> {0, 1} 復元まで行う
         x_full, y_full, p_full, t_full = apply_downsampling_half(
             x_full.astype(np.int32), 
             y_full.astype(np.int32), 
-            p_full, # BooleanでもOK
+            p_full, 
             t_full, 
             args.width, 
             args.height
         )
 
-    # --- 3. データ型変換 & 保存 ---
-    # 時間単位: ナノ秒(CARLA) -> マイクロ秒
+    # 保存処理
     t_micro = (t_full // 1000).astype(np.uint64)
-    
-    # Polarity: Booleanの場合もあるので、念のため astype(uint8) で 0, 1 に正規化
-    # ダウンサンプル済みの場合は既に uint8(0,1) になっていますが、未処理の場合はここで変換
     p_uint8 = p_full.astype(np.uint8)
-    
     x_uint16 = x_full.astype(np.uint16)
     y_uint16 = y_full.astype(np.uint16)
 
@@ -174,7 +144,6 @@ def convert_dvs_dir_to_h5(seq: SequenceDir, args):
         grp.create_dataset("t", data=t_micro,  dtype='uint64')
         grp.create_dataset("p", data=p_uint8,  dtype='uint8')
         
-        # 解像度情報の保存
         if args.downsample:
             grp.attrs['width'] = args.width // 2
             grp.attrs['height'] = args.height // 2
@@ -182,11 +151,25 @@ def convert_dvs_dir_to_h5(seq: SequenceDir, args):
             grp.attrs['width'] = args.width
             grp.attrs['height'] = args.height
 
-    tqdm.write(f"  ✅ Saved: {output_path} (Events: {len(t_micro)})")
-
+    return f"Saved: {seq.root.name} (Events: {len(t_micro)})"
 
 # ==========================================
-# 5. メイン探索ロジック
+# 5. マルチプロセス用ラッパー
+# ==========================================
+def _worker_task(payload):
+    """
+    Pool.imap等に渡すためのラッパー関数。
+    引数をアンパックして処理関数へ渡す。
+    """
+    path, args = payload
+    try:
+        result = convert_single_sequence(path, args)
+        return result
+    except Exception as e:
+        return f"Error in {path.name}: {e}"
+
+# ==========================================
+# 6. メイン探索ロジック
 # ==========================================
 def process_dataset(args):
     root_dir = Path(args.input_dir)
@@ -196,23 +179,61 @@ def process_dataset(args):
         print(f"No 'Town' directories found in {root_dir}")
         return
 
-    print(f"Found {len(town_dirs)} scenes.")
-    if args.downsample:
-        print(f"Option: Downsampling enabled (1/2 scale). Input assume: {args.width}x{args.height}")
-
-    for town in tqdm(town_dirs, desc="Scenes"):
+    # 1. 処理対象のディレクトリパスを全て収集する
+    target_paths = []
+    print("Scanning directories...")
+    
+    for town in town_dirs:
         part_dirs = sorted([d for d in town.iterdir() if d.is_dir() and d.name.isdigit()])
         
         if not part_dirs:
+            # 分割されていない場合 (Town直下)
             seq = SequenceDir(town)
             if seq.dvs_dir.exists():
-                convert_dvs_dir_to_h5(seq, args)
-            continue
+                target_paths.append(town)
+        else:
+            # 分割されている場合 (Town/01, Town/02...)
+            for part in part_dirs:
+                seq = SequenceDir(part)
+                if seq.dvs_dir.exists():
+                    target_paths.append(part)
 
-        for part in part_dirs:
-            seq = SequenceDir(part)
-            if seq.dvs_dir.exists():
-                convert_dvs_dir_to_h5(seq, args)
+    total_tasks = len(target_paths)
+    print(f"Found {total_tasks} sequences to process.")
+    
+    if total_tasks == 0:
+        return
+
+    if args.downsample:
+        print(f"Option: Downsampling enabled (1/2 scale). Input assume: {args.width}x{args.height}")
+
+    # 2. SpawnコンテキストでPoolを作成して並列処理実行
+    num_workers = args.workers if args.workers > 0 else max(1, mp.cpu_count() - 2)
+    print(f"Starting parallel processing with {num_workers} workers (spawn method)...")
+
+    # 引数リストの作成 (パスと設定をペアにする)
+    task_args = [(p, args) for p in target_paths]
+
+    ctx = mp.get_context('spawn')
+    with ctx.Pool(processes=num_workers) as pool:
+        # imap_unorderedを使って完了したものから順次処理
+        # tqdmで進捗を表示
+        results = list(tqdm(
+            pool.imap_unordered(_worker_task, task_args),
+            total=total_tasks,
+            desc="Processing",
+            unit="seq"
+        ))
+
+    # 3. 結果の要約表示（オプション）
+    saved_count = sum(1 for r in results if r and r.startswith("Saved"))
+    skipped_count = sum(1 for r in results if r and r.startswith("Skipped"))
+    error_count = sum(1 for r in results if r and r.startswith("Error"))
+    
+    print("\nSummary:")
+    print(f"  Processed: {saved_count}")
+    print(f"  Skipped:   {skipped_count}")
+    print(f"  Errors:    {error_count}")
 
 
 if __name__ == "__main__":
@@ -223,6 +244,7 @@ if __name__ == "__main__":
     parser.add_argument("--downsample", action="store_true", help="Enable 1/2 spatial downsampling")
     parser.add_argument("--width", type=int, default=1280, help="Original input width (default: 1280)")
     parser.add_argument("--height", type=int, default=960, help="Original input height (default: 960)")
+    parser.add_argument("--workers", type=int, default=0, help="Number of workers (default: CPU_COUNT - 2)")
     
     args = parser.parse_args()
     
