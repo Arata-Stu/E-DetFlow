@@ -2,7 +2,7 @@
 set -euo pipefail
 
 DATASET_ROOT="${1:-./datasets}"
-OUT_FILE="${2:-split_SEVD_by_town.yaml}"
+OUT_FILE="${2:-split_SEVD.yaml}"
 VAL_RATIO=0.15
 TEST_RATIO=0.15
 
