@@ -18,7 +18,7 @@ conf_preprocess/extraction/const_duration.yaml \
 conf_preprocess/filter_SEVD.yaml \
 -d SEVD \
 --downsample \
--np 5 \
+-np 5 
 ```
 
 ## フィルタあり
