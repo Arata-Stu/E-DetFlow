@@ -235,10 +235,12 @@ def create_labels_from_sequence(seq: SequenceDir, args):
                 all_labels.append(label_data)
 
     if not all_labels:
-        # ラベルが見つからなかった、あるいは全てタイムスタンプ欠落だった場合
+        # ラベルが見つからなかった場合、ファイル生成をスキップしてログを出す
         if missing_frames:
-            tqdm.write(f"⚠️  [Error] No valid labels processed in: {seq.root}")
+            tqdm.write(f"🚫 [Skip Saving] Timestamps missing (valid=0): {seq.root.name}")
             _print_debug_info(seq.root, frame_map, missing_frames)
+        else:
+            tqdm.write(f"🚫 [Skip Saving] All labels filtered out (valid=0): {seq.root.name}")
         return
 
     # 3. NumPy配列化
@@ -246,7 +248,7 @@ def create_labels_from_sequence(seq: SequenceDir, args):
     structured_array.sort(order='t')
 
     # ==========================================
-    # ★ フィルタリング処理 (省略・変更なし)
+    # ★ フィルタリング処理
     # ==========================================
     original_count = len(structured_array)
     if args.filter_static:
@@ -261,13 +263,16 @@ def create_labels_from_sequence(seq: SequenceDir, args):
             structured_array = structured_array[~is_static_label]
 
     # 保存処理
+    if len(structured_array) == 0:
+        tqdm.write(f"🚫 [Skip Saving] All labels removed after static filtering: {seq.root.name}")
+        return
+        
     np.save(str(output_path), structured_array)
 
     # 結果レポート
     filtered_count = len(structured_array)
     status_str = "Filtered" if args.filter_static else "Raw"
     
-    # ★変更点2: 標準出力メッセージを短くし、問題がある時だけ詳細を出す
     msg = f"Saved: {seq.root.name}/{filename} ({filtered_count} labels)"
     
     if args.filter_static:
