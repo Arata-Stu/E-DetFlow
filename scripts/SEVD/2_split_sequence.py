@@ -2,14 +2,24 @@
 import argparse
 import shutil
 import math
+import re
 from pathlib import Path
 
 from utils.directory import SequenceDir
 
 def zpad(i: int, n: int) -> str:
-    """ゼロ埋めヘルパー (例: 1 -> '01', 10 -> '10')"""
+    """ゼロ埋めヘルパー"""
     width = max(2, len(str(n)))
     return f"{i:0{width}d}"
+
+
+def natural_sort_key(s):
+    """
+    文字列内の数字を数値として認識させてソートするためのキー生成関数
+    例: ['img1.png', 'img2.png', 'img10.png'] の順に並ぶようになる
+    """
+    return [int(text) if text.isdigit() else text.lower()
+            for text in re.split('([0-9]+)', str(s))]
 
 
 def split_text_by_lines(file_path: Path, part_dirs: list[Path], move: bool, dry: bool):
@@ -27,7 +37,6 @@ def split_text_by_lines(file_path: Path, part_dirs: list[Path], move: bool, dry:
         chunk = lines[(i - 1) * chunk_size: i * chunk_size]
         if not chunk: continue
         
-        # 出力先パスの決定 (gnssフォルダ内なら、分割先でもgnssフォルダを作る)
         if is_in_subdir:
             out_dir = pdir / file_path.parent.name
         else:
@@ -42,7 +51,6 @@ def split_text_by_lines(file_path: Path, part_dirs: list[Path], move: bool, dry:
                 
     if move and not dry:
         file_path.unlink()
-        # 親ディレクトリが空なら削除
         if is_in_subdir and not any(file_path.parent.iterdir()):
              file_path.parent.rmdir()
 
@@ -71,12 +79,15 @@ def split_text_by_commas(file_path: Path, part_dirs: list[Path], move: bool, dry
 
 def split_frame_dir(sensor_dir: Path, part_dirs: list[Path], move: bool, dry: bool):
     """センサーディレクトリ内のファイルを分割"""
-    # 隠しファイル以外を取得
-    files = sorted([f for f in sensor_dir.iterdir() if f.is_file() and not f.name.startswith('.')])
+    
+    all_files = [f for f in sensor_dir.iterdir() if f.is_file() and not f.name.startswith('.')]
     
     # メタデータとデータファイルを分離
-    data_files = [f for f in files if "metadata" not in f.name.lower()]
-    meta_files = [f for f in files if "metadata" in f.name.lower()]
+    data_files = [f for f in all_files if "metadata" not in f.name.lower()]
+    meta_files = [f for f in all_files if "metadata" in f.name.lower()]
+
+    # 自然順ソートを適用 (9999 -> 10000 の順序を守る)
+    data_files.sort(key=lambda p: natural_sort_key(p.name))
 
     if not data_files:
         return
@@ -89,7 +100,6 @@ def split_frame_dir(sensor_dir: Path, part_dirs: list[Path], move: bool, dry: bo
     for i, pdir in enumerate(part_dirs, start=1):
         target_dir = pdir / sensor_dir.name
         
-        # データの移動/コピー
         chunk = data_files[(i - 1) * chunk_size: i * chunk_size]
         for f in chunk:
             dest = target_dir / f.name
@@ -97,7 +107,6 @@ def split_frame_dir(sensor_dir: Path, part_dirs: list[Path], move: bool, dry: bo
                 target_dir.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(f), str(dest)) if move else shutil.copy2(f, dest)
         
-        # メタデータのコピー (全パーツに配置)
         for meta in meta_files:
             dest_meta = target_dir / meta.name
             if not dry:
@@ -105,7 +114,6 @@ def split_frame_dir(sensor_dir: Path, part_dirs: list[Path], move: bool, dry: bo
                 if not dest_meta.exists():
                     shutil.copy2(meta, dest_meta)
 
-    # 元ディレクトリの削除
     if move and not dry:
         shutil.rmtree(sensor_dir)
 
@@ -113,30 +121,23 @@ def split_frame_dir(sensor_dir: Path, part_dirs: list[Path], move: bool, dry: bo
 def process_scene(scene_path: Path, n_split: int, dry: bool):
     print(f"\n=== Processing Scene: {scene_path.name} ===")
     
-    # SequenceDirクラスを使ってディレクトリ構造を把握
     seq = SequenceDir(scene_path)
     
-    # 分割先のディレクトリリストを作成
     part_dirs = [scene_path / zpad(i, n_split) for i in range(1, n_split + 1)]
     
     if not dry:
         for d in part_dirs:
             d.mkdir(exist_ok=True)
 
-    # 1. 単一ファイル (GNSS, IMU, Steering) の分割
-    # SequenceDirのプロパティから「存在するファイル」と「分割タイプ」を取得
     for file_path, split_type in seq.target_line_files:
         if split_type == 'line':
             split_text_by_lines(file_path, part_dirs, move=True, dry=dry)
         elif split_type == 'comma':
             split_text_by_commas(file_path, part_dirs, move=True, dry=dry)
 
-    # 2. センサーディレクトリ (RGB, DVS...) の分割
-    # SequenceDirのプロパティから「存在するディレクトリ」を取得
     for sensor_dir in seq.target_sensor_dirs:
         split_frame_dir(sensor_dir, part_dirs, move=True, dry=dry)
 
-    # 3. 掃除
     if not dry:
         for d in sorted(scene_path.iterdir()):
             if d.is_dir() and d not in part_dirs and not any(d.iterdir()):
