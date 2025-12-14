@@ -63,7 +63,11 @@ class SequenceBase(MapDataPipe):
         height, width = get_original_hw(dataset_type)
         self.seq_len = sequence_length
 
-        ds_factor_str = '_ds2_nearest' if downsample_by_factor_2 else ''
+        if dataset_type in {DatasetType.GEN1, DatasetType.GEN4, DatasetType.VGA}:
+            ds_factor_str = '_ds2_nearest' if downsample_by_factor_2 else ''
+        elif dataset_type == DatasetType.SEVD:
+            ds_factor_str = ''
+            
         self.ev_repr_file = ev_repr_dir / f'event_representations{ds_factor_str}.h5'
         assert self.ev_repr_file.exists(), f'{str(self.ev_repr_file)=}'
 
