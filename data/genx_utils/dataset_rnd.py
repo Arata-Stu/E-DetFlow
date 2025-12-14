@@ -13,7 +13,7 @@ from data.genx_utils.labels import SparselyBatchedObjectLabels
 from data.genx_utils.sequence_rnd import SequenceForRandomAccess
 from data.utils.augmentor import RandomSpatialAugmentorGenX
 from data.utils.types import DatasetMode, LoaderDataDictGenX, DatasetType, DataType
-
+from data.utils.files import find_sevd_sequences
 
 class SequenceDataset(Dataset):
     def __init__(self,
@@ -109,12 +109,16 @@ def build_random_access_dataset(dataset_mode: DatasetMode, dataset_config: DictC
     split_path = dataset_path / mode2str[dataset_mode]
     assert split_path.is_dir()
 
+    if dataset_config.name == 'SEVD':
+        sequence_dirs = find_sevd_sequences(split_path)
+    else:
+        sequence_dirs = [p for p in split_path.iterdir() if p.is_dir()]
+    
     seq_datasets = list()
-    for entry in tqdm(split_path.iterdir(), desc=f'creating rnd access {mode2str[dataset_mode]} datasets'):
+    for entry in tqdm(sequence_dirs, desc=f'creating rnd access {mode2str[dataset_mode]} datasets'):
         seq_datasets.append(SequenceDataset(path=entry, dataset_mode=dataset_mode, dataset_config=dataset_config))
 
     return CustomConcatDataset(seq_datasets)
-
 
 def get_weighted_random_sampler(dataset: CustomConcatDataset) -> WeightedRandomSampler:
     class2count = dict()

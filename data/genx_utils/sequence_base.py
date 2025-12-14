@@ -51,7 +51,7 @@ class SequenceBase(MapDataPipe):
                  only_load_end_labels: bool):
         assert sequence_length >= 1
         assert path.is_dir()
-        assert dataset_type in {DatasetType.GEN1, DatasetType.GEN4, DatasetType.VGA}, f'{dataset_type} not implemented'
+        assert dataset_type in {DatasetType.GEN1, DatasetType.GEN4, DatasetType.VGA, DatasetType.SEVD}, f'{dataset_type} not implemented'
 
         self.only_load_end_labels = only_load_end_labels
 

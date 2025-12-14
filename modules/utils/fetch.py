@@ -16,7 +16,7 @@ def fetch_data_module(config: DictConfig) -> pl.LightningDataModule:
     num_workers_train = config.hardware.num_workers.get('train', num_workers_generic)
     num_workers_eval = config.hardware.num_workers.get('eval', num_workers_generic)
     dataset_str = config.dataset.name
-    if dataset_str in {'gen1', 'gen4', 'VGA'}:
+    if dataset_str in {'gen1', 'gen4', 'VGA', 'SEVD'}:
         return DataModule(config.dataset,
                                 num_workers_train=num_workers_train,
                                 num_workers_eval=num_workers_eval,

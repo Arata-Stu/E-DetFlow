@@ -10,6 +10,7 @@ from data.genx_utils.sequence_for_streaming import SequenceForIter, RandAugmentI
 from data.utils.stream_concat_datapipe import ConcatStreamingDataPipe
 from data.utils.stream_sharded_datapipe import ShardedStreamingDataPipe
 from data.utils.types import DatasetMode, DatasetType
+from data.utils.files import find_sevd_sequences
 
 
 def build_streaming_dataset(dataset_mode: DatasetMode, dataset_config: DictConfig, batch_size: int, num_workers: int) \
@@ -28,7 +29,13 @@ def build_streaming_dataset(dataset_mode: DatasetMode, dataset_config: DictConfi
     num_splits = 0
     num_split_sequences = 0
     guarantee_labels = dataset_mode == DatasetMode.TRAIN
-    for entry in tqdm(split_path.iterdir(), desc=f'creating streaming {mode2str[dataset_mode]} datasets'):
+    if dataset_config.name == 'SEVD':
+        print(f"Applying recursive search for SEVD dataset in {split_path}")
+        sequence_dirs = find_sevd_sequences(split_path)
+    else:
+        sequence_dirs = [p for p in split_path.iterdir() if p.is_dir()]
+    
+    for entry in tqdm(sequence_dirs, desc=f'creating streaming {mode2str[dataset_mode]} datasets'):
         new_datapipes = get_sequences(path=entry, dataset_config=dataset_config, guarantee_labels=guarantee_labels)
         if len(new_datapipes) == 1:
             num_full_sequences += 1
