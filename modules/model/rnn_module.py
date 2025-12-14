@@ -164,10 +164,9 @@ class ModelModule(pl.LightningModule):
         labels_yolox = ObjectLabels.get_labels_as_batched_tensor(obj_label_list=obj_labels, format_='yolox')
         labels_yolox = labels_yolox.to(dtype=self.dtype)
 
-        neck_features = self.mdl.forward_neck(backbone_features=selected_backbone_features)
+        predictions, losses = self.mdl.forward_detect(backbone_features=selected_backbone_features,
+                                                      targets=labels_yolox)
 
-        predictions, losses = self.mdl.forward_head(neck_features=neck_features,
-                                                    targets=labels_yolox)
 
         if self.mode_2_sampling_mode[mode] in (DatasetSamplingMode.MIXED, DatasetSamplingMode.RANDOM):
             # We only want to evaluate the last batch_size samples if we use random sampling (or mixed).
@@ -259,8 +258,9 @@ class ModelModule(pl.LightningModule):
         if len(obj_labels) == 0:
             return {ObjDetOutput.SKIP_VIZ: True}
         selected_backbone_features = backbone_feature_selector.get_batched_backbone_features()
-        neck_features = self.mdl.forward_neck(backbone_features=selected_backbone_features)
-        predictions, _ = self.mdl.forward_head(neck_features=neck_features)
+        predictions, _ = self.mdl.forward_detect(backbone_features=selected_backbone_features)
+
+
 
         pred_processed = postprocess(prediction=predictions,
                                      num_classes=self.mdl_config.head.num_classes,
