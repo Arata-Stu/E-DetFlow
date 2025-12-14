@@ -18,7 +18,7 @@ DATA_DIR="/path/to/dataset/"
 GROUP=""
 
 python3 train.py \
-dataset=${CONFIG_DATASET_NAME} \
+dataset=${DATASET} \
 model=${MODEL} \
 dataset.path=${DATA_DIR} \
 dataset.ev_repr_name="'stacked_histogram_dt=${DT_MS}_nbins=${T_BIN}'" \
