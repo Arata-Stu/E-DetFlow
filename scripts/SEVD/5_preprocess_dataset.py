@@ -67,9 +67,6 @@ split_name_2_type = {
 dataset_2_height = {'SEVD': 960}
 dataset_2_width = {'SEVD': 1280}
 
-dirs_to_ignore = {
-    'SEVD': (),
-}
 
 class NoLabelsException(Exception):
     ...
