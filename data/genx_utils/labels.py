@@ -166,12 +166,25 @@ class ObjectLabelFactory(ObjectLabelBase):
     def from_structured_array(object_labels: np.ndarray,
                               objframe_idx_2_label_idx: np.ndarray,
                               input_size_hw: Tuple[int, int],
-                              downsample_factor: Optional[float] = None) -> ObjectLabelFactory:
-        np_labels = [object_labels[key].astype('float32') for key in ObjectLabels._str2idx.keys()]
+                              downsample_factor: Optional[float] = None) -> 'ObjectLabelFactory':
+        
+        np_labels_list = []
+        for key in ObjectLabels._str2idx.keys():
+            if key in object_labels.dtype.names:
+                np_labels_list.append(object_labels[key].astype('float32'))
+            elif key == 'class_confidence':
+                np_labels_list.append(np.ones(object_labels.shape, dtype='float32'))
+            else:
+                # x, y, w, h, class_id など他の必須キーがない場合はエラーにする
+                raise ValueError(f"Missing required field '{key}' in object labels structure.")
+        np_labels = np.stack(np_labels_list, axis=0)
         np_labels = rearrange(np_labels, 'fields L -> L fields')
+
         torch_labels = th.from_numpy(np_labels)
         objframe_idx_2_label_idx = th.from_numpy(objframe_idx_2_label_idx.astype('int64'))
+        
         assert objframe_idx_2_label_idx.numel() == np.unique(object_labels['t']).size
+        
         return ObjectLabelFactory(object_labels=torch_labels,
                                   objframe_idx_2_label_idx=objframe_idx_2_label_idx,
                                   input_size_hw=input_size_hw,
