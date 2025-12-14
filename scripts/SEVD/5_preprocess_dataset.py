@@ -536,6 +536,10 @@ def process_sequence(dataset: str,
     except NoLabelsException:
         print(f"No labels for {in_npy_file}, skipping.")
         return
+    except ValueError as e:
+        error_msg = f"!!! ERROR in file: {in_npy_file} (Seq: {in_npy_file.parent.parent.name}) !!! -> {e}"
+        raise ValueError(error_msg) from e
+
 
     # Labels Saving
     save_labels(out_labels_dir=out_labels_dir, labels_per_frame=labels_per_frame, frame_timestamps_us=frame_timestamps_us)
@@ -573,6 +577,7 @@ if __name__ == '__main__':
     parser.add_argument('--downsample', action='store_true', help="Use events_ds.h5 and 1/2 resolution")
     parser.add_argument('-np', '--num_processes', type=int, default=1)
     parser.add_argument('--filtered_label', action='store_true', help="Use pre-filtered labels (if available)")
+    parser.add_argument('--ignore_yaml', default=None, help='Path to ignore definition yaml file')
     args = parser.parse_args()
 
     # Config読み込み
@@ -583,6 +588,18 @@ if __name__ == '__main__':
     filter_cfg = OmegaConf.load(str(bbox_filter_yaml_config))
     filter_cfg = OmegaConf.merge(OmegaConf.structured(FilterConf), filter_cfg)
     split_config = OmegaConf.load(str(args.split_yaml))
+
+    # ==========================================
+    # Ignore List (除外リスト) の読み込み
+    # ==========================================
+    dirs_to_ignore = {}
+    if args.ignore_yaml:
+        ignore_yaml_path = Path(args.ignore_yaml)
+        if ignore_yaml_path.exists():
+            print(f"Loading ignore list from: {ignore_yaml_path}")
+            dirs_to_ignore = OmegaConf.load(ignore_yaml_path)
+        else:
+            print(f"Warning: Ignore YAML provided but not found: {ignore_yaml_path}")
 
     dataset_input_path = Path(args.input_dir)
     target_dir = Path(args.target_dir)
@@ -628,23 +645,25 @@ if __name__ == '__main__':
         os.makedirs(split_out_dir, exist_ok=True)
 
         for sequence_id in sequence_ids:
-            if args.dataset in dirs_to_ignore and sequence_id in dirs_to_ignore[args.dataset]:
-                continue
+            # ==========================================
+            # 除外リストに含まれているかチェック
+            # ==========================================
+            if args.dataset in dirs_to_ignore:
+                # OmegaConfのListConfig内検索、または通常のリスト検索
+                if sequence_id in dirs_to_ignore[args.dataset]:
+                    print(f"Ignoring sequence (Blacklisted): {sequence_id}")
+                    continue
 
-            # パス構築 (SequenceDir対応)
-            # Root/Town01/0001/...
             seq_dir = dataset_input_path / sequence_id
             
-            # Label Path
             npy_file = seq_dir / "labels" / f"labels_bbox{target_label_suffix}.npy"
             h5f_path = seq_dir / "events" / target_h5_filename
 
             if not npy_file.exists():
                 continue
             
-            # 指定されたH5が存在しない場合はスキップ (警告を出すと親切)
+            # 指定されたH5が存在しない場合はスキップ
             if not h5f_path.exists():
-                # print(f"[Skip] Missing {target_h5_filename} in {seq_dir}")
                 continue
 
             # 出力先
