@@ -3,6 +3,7 @@ import argparse
 import re
 import numpy as np
 import cv2
+import h5py
 from pathlib import Path
 from tqdm import tqdm
 
@@ -12,7 +13,6 @@ from utils.directory import SequenceDir
 # 1. Helper Functions
 # ==========================================
 def parse_gnss_timestamps(gnss_file_path: Path):
-    """GNSSログから frame -> timestamp (microseconds) の辞書を作成"""
     frame_to_ts = {}
     pattern = re.compile(r"frame=(\d+),\s*timestamp=([0-9.]+)")
     
@@ -35,14 +35,11 @@ def parse_gnss_timestamps(gnss_file_path: Path):
     return frame_to_ts
 
 def load_flow_from_npz(npz_path: Path):
-    """npzファイルからFlowデータをロードする"""
     try:
         with np.load(npz_path) as data:
-            # 一般的なキーを探索
             for key in ['flow', 'arr_0', 'data']:
                 if key in data:
                     return data[key]
-            # キーが見つからない場合、最初のキーを使用
             keys = list(data.keys())
             if keys:
                 return data[keys[0]]
@@ -58,14 +55,8 @@ def natural_sort_key(s):
 # 2. Core Logic
 # ==========================================
 def aggregate_optical_flow(seq: SequenceDir, args):
-    """
-    Optical Flowを集約し、必要に応じてダウンサンプルを行う
-    """
-    # 保存先ディレクトリ
     output_dir = seq.root / "optical_flow_processed"
-    
-    # 出力ファイル名の切り替え
-    suffix = "_ds.npy" if args.downsample else ".npy"
+    suffix = "_ds.h5" if args.downsample else ".h5"
     output_path = output_dir / f"optical_flow_synced{suffix}"
     
     if not seq.optical_flow_dir.exists():
@@ -84,62 +75,79 @@ def aggregate_optical_flow(seq: SequenceDir, args):
 
     # ファイルリスト取得
     flow_files = sorted(list(seq.optical_flow_dir.glob("*.npz")), key=lambda p: natural_sort_key(p.name))
-    valid_data = []
     
-    desc = f"Processing ({'Half' if args.downsample else 'Full'}) {seq.root.name}"
-    
-    for npz_file in tqdm(flow_files, desc=desc, leave=False):
+    # 処理対象リスト作成
+    target_list = []
+    for npz_file in flow_files:
         try:
             frame_id = int(npz_file.stem)
         except ValueError:
             continue
-
-        if frame_id not in frame_map:
-            continue
-
-        ts_us = frame_map[frame_id]
-        flow_data = load_flow_from_npz(npz_file)
-        
-        if flow_data is None:
-            continue
             
-        # 形状チェック (H, W, 2)
-        if flow_data.ndim != 3 or flow_data.shape[2] != 2:
-            continue
-
-        # ダウンサンプル処理
-        if args.downsample:
-            h, w, _ = flow_data.shape
-            new_h, new_w = h // 2, w // 2
+        if frame_id in frame_map:
+            ts_us = frame_map[frame_id]
+            target_list.append((ts_us, npz_file))
             
-            # 1. 解像度変更 (Resolution)
-            flow_data = cv2.resize(flow_data, (new_w, new_h), interpolation=cv2.INTER_AREA)
-            
-            # 2. 値のスケーリング (Magnitude)
-            flow_data = flow_data * 0.5
-
-        valid_data.append((ts_us, flow_data))
-
-    if not valid_data:
+    if not target_list:
         tqdm.write(f"🚫 [Warn] No valid flow data found for {seq.root.name}")
         return
 
-    # 配列結合
-    valid_data.sort(key=lambda x: x[0])
-    
-    timestamps = np.array([x[0] for x in valid_data], dtype=np.int64)
-    flows = np.stack([x[1] for x in valid_data], axis=0).astype(np.float32)
+    target_list.sort(key=lambda x: x[0])
+    num_frames = len(target_list)
 
-    # 保存
-    save_data = {
-        'timestamps': timestamps,
-        'flow': flows
-    }
+    # 形状決定
+    _, first_path = target_list[0]
+    sample_flow = load_flow_from_npz(first_path)
+    if sample_flow is None:
+        return
+
+    orig_h, orig_w, c = sample_flow.shape
     
-    np.save(str(output_path), save_data)
+    if args.downsample:
+        final_h, final_w = orig_h // 2, orig_w // 2
+    else:
+        final_h, final_w = orig_h, orig_w
+
+    # HDF5書き込み
+    desc = f"Writing H5 ({'Half' if args.downsample else 'Full'}) {seq.root.name}"
+    compression_args = {"compression": "gzip", "compression_opts": 4}
     
-    size_mb = output_path.stat().st_size / (1024 * 1024)
-    tqdm.write(f"✅ Saved: {output_path.name} | Shape: {flows.shape} | Size: {size_mb:.2f} MB")
+    try:
+        with h5py.File(str(output_path), 'w') as h5f:
+            dset_flow = h5f.create_dataset(
+                'flow', 
+                shape=(num_frames, final_h, final_w, 2), 
+                dtype='float32', 
+                chunks=(1, final_h, final_w, 2),
+                **compression_args
+            )
+            
+            dset_ts = h5f.create_dataset(
+                'timestamps', 
+                shape=(num_frames,), 
+                dtype='int64'
+            )
+
+            for i, (ts_us, npz_file) in enumerate(tqdm(target_list, desc=desc, leave=False)):
+                flow_data = load_flow_from_npz(npz_file)
+                
+                if flow_data is None:
+                    flow_data = np.zeros((orig_h, orig_w, 2), dtype=np.float32)
+                
+                if args.downsample:
+                    flow_data = cv2.resize(flow_data, (final_w, final_h), interpolation=cv2.INTER_AREA)
+                    flow_data = flow_data * 0.5
+                
+                dset_flow[i] = flow_data
+                dset_ts[i] = ts_us
+
+        size_mb = output_path.stat().st_size / (1024 * 1024)
+        tqdm.write(f"✅ Saved: {output_path.name} | Frames: {num_frames} | Size: {size_mb:.2f} MB")
+
+    except Exception as e:
+        tqdm.write(f"❌ Error writing H5 for {seq.root.name}: {e}")
+        if output_path.exists():
+            output_path.unlink()
 
 # ==========================================
 # 3. Main Loop
@@ -151,18 +159,16 @@ def process_dataset(root_dir: Path, args):
         print(f"No 'Town' directories found in {root_dir}")
         return
 
-    print(f"Options: Downsample={args.downsample}")
+    print(f"Options: Downsample={args.downsample} (Output format: HDF5)")
 
     for town in tqdm(town_dirs, desc="Total Progress"):
         part_dirs = sorted([d for d in town.iterdir() if d.is_dir() and d.name.isdigit()])
         
-        # Partディレクトリがない場合 (Town直下)
         if not part_dirs:
             seq = SequenceDir(town)
             aggregate_optical_flow(seq, args)
             continue
 
-        # Partディレクトリがある場合
         for part in part_dirs:
             seq = SequenceDir(part)
             aggregate_optical_flow(seq, args)
