@@ -48,6 +48,7 @@ from data.utils.representations import (
 class DataKeys(Enum):
     InNPY = auto()
     InH5 = auto()
+    InFlowH5 = auto()  
     OutLabelDir = auto()
     OutEvReprDir = auto()
     SplitType = auto()
@@ -194,10 +195,6 @@ def get_configuration(ev_repr_yaml_config: Path, extraction_yaml_config: Path) -
     config = OmegaConf.merge(config_schema, config)
     return config
 
-# ==========================================
-# IO Classes (H5Writer / H5Reader)
-# ==========================================
-
 class H5Writer:
     def __init__(self, outfile: Path, key: str, ev_repr_shape: Tuple, numpy_dtype: np.dtype):
         assert len(ev_repr_shape) == 3
@@ -305,6 +302,38 @@ class H5Reader:
         )
         return ev_data_dict
 
+class FlowReader:
+    def __init__(self, h5_file: Path):
+        self.h5_file = h5_file
+        self.h5f = None
+        self.timestamps = None
+        
+    def __enter__(self):
+        self.h5f = h5py.File(str(self.h5_file), 'r')
+        self.timestamps = np.asarray(self.h5f['timestamps'], dtype='int64')
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.h5f:
+            self.h5f.close()
+
+    def get_nearest_flow(self, target_ts_us: int):
+        """指定時刻に最も近いFlowフレームを取得"""
+        idx = np.searchsorted(self.timestamps, target_ts_us, side="left")
+        
+        # 境界チェックと最近傍探索
+        if idx == 0:
+            best_idx = 0
+        elif idx == len(self.timestamps):
+            best_idx = len(self.timestamps) - 1
+        else:
+            dt_prev = abs(self.timestamps[idx-1] - target_ts_us)
+            dt_curr = abs(self.timestamps[idx] - target_ts_us)
+            best_idx = idx - 1 if dt_prev < dt_curr else idx
+            
+        return self.h5f['flow'][best_idx]
+
+
 # ==========================================
 # Filtering Logic
 # ==========================================
@@ -337,12 +366,6 @@ def remove_faulty_huge_bbox_filter(labels: np.ndarray, dataset_type: str) -> np.
     return labels[side_ok]
 
 def crop_to_fov_filter(labels: np.ndarray, dataset_type: str) -> np.ndarray:
-    # FOV cropping logic needs to know current resolution.
-    # Assumption: labels are in original resolution (1280x960 for SEVD).
-    # If using downsampled events, labels should also be scaled? 
-    # Usually datasets keep labels in original coordinates, and we scale them when loading.
-    # Here, we just clip to the *original* dataset size defined in dataset_2_height/width.
-    
     frame_height = dataset_2_height[dataset_type]
     frame_width = dataset_2_width[dataset_type]
     
@@ -380,7 +403,6 @@ def get_base_delta_ts_for_labels_us(unique_label_ts_us: np.ndarray, dataset_type
     median_diff_us = np.median(diff_us)
     hz = int(np.rint(10 ** 6 / median_diff_us))
     
-    # 簡易的なHz判定
     if hz >= 50: # 60Hz
         return int(6 * median_diff_us) # approx 100ms
     elif hz >= 25: # 30Hz
@@ -393,7 +415,6 @@ def get_base_delta_ts_for_labels_us(unique_label_ts_us: np.ndarray, dataset_type
 # ==========================================
 
 def save_labels(out_labels_dir: Path, labels_per_frame: List[np.ndarray], frame_timestamps_us: np.ndarray, match_if_exists: bool = True) -> None:
-    # ラベル保存ロジック（変更なし）
     assert len(labels_per_frame) == len(frame_timestamps_us)
     labels_v2 = list()
     objframe_idx_2_label_idx = list()
@@ -406,7 +427,7 @@ def save_labels(out_labels_dir: Path, labels_per_frame: List[np.ndarray], frame_
 
     outfile_labels = out_labels_dir / 'labels.npz'
     if outfile_labels.exists() and match_if_exists:
-        return # Skip if exists
+        return 
     else:
         np.savez(str(outfile_labels), labels=labels_v2, objframe_idx_2_label_idx=objframe_idx_2_label_idx)
 
@@ -415,7 +436,6 @@ def save_labels(out_labels_dir: Path, labels_per_frame: List[np.ndarray], frame_
         np.save(str(out_labels_ts_file), frame_timestamps_us)
 
 def labels_and_ev_repr_timestamps(npy_file: Path, split_type: SplitType, filter_cfg: DictConfig, align_t_ms: int, ts_step_ev_repr_ms: int, dataset_type: str):
-    # ラベル読み込みとタイムスタンプ計算（変更なし）
     sequence_labels = np.load(str(npy_file))
     sequence_labels = apply_filters(labels=sequence_labels, split_type=split_type, filter_cfg=filter_cfg, dataset_type=dataset_type)
     if sequence_labels.size == 0:
@@ -431,8 +451,7 @@ def labels_and_ev_repr_timestamps(npy_file: Path, split_type: SplitType, filter_
     frame_timestamps_us = [unique_ts_us[unique_ts_idx_first]]
     num_ev_reprs_between_frame_ts = []
     
-    # フレーム間隔からイベント表現の個数を計算
-    ts_step_frame_ms = 100 # Assuming 10Hz labels
+    ts_step_frame_ms = 100 
     for unique_ts_idx in range(unique_ts_idx_first + 1, len(unique_ts_us)):
         reference_time = frame_timestamps_us[-1]
         ts = unique_ts_us[unique_ts_idx]
@@ -452,7 +471,6 @@ def labels_and_ev_repr_timestamps(npy_file: Path, split_type: SplitType, filter_
     for idx_start, idx_end in zip(start_indices_per_label, end_indices_per_label):
         labels_per_frame.append(sequence_labels[idx_start:idx_end])
 
-    # Event repr timestamps generation
     ev_repr_timestamps_us_end = list(reversed(range(frame_timestamps_us[0], 0, -delta_t_us)))[1:-1]
     for idx, (num_ev_repr_between, frame_ts_us_start, frame_ts_us_end) in enumerate(zip(num_ev_reprs_between_frame_ts, frame_timestamps_us[:-1], frame_timestamps_us[1:])):
         new_edge_timestamps = np.asarray(np.linspace(frame_ts_us_start, frame_ts_us_end, num_ev_repr_between + 1), dtype='int64').tolist()
@@ -482,9 +500,7 @@ def write_event_representations(in_h5_file: Path, ev_out_dir: Path, dataset: str
     with H5Reader(in_h5_file, dataset=dataset) as h5_reader, \
             H5Writer(ev_outfile_in_progress, key='data', ev_repr_shape=ev_repr_shape, numpy_dtype=ev_repr_dtype) as h5_writer:
         
-        # Readerから実際のH, Wを取得して検証
         h_reader, w_reader = h5_reader.get_height_and_width()
-        # Reprが期待するサイズとH5のサイズが一致するか確認
         assert (h_reader, w_reader) == ev_repr_shape[-2:], f"Mismatch: H5({h_reader}x{w_reader}) vs Repr({ev_repr_shape[-2:]})"
 
         ev_ts_us = h5_reader.time
@@ -502,6 +518,45 @@ def write_event_representations(in_h5_file: Path, ev_out_dir: Path, dataset: str
             
     os.rename(ev_outfile_in_progress, ev_outfile)
 
+def write_synced_flow(flow_h5_path: Path, out_dir: Path, target_timestamps_us: np.ndarray):
+    """
+    イベント表現のタイムスタンプに合わせて、Optical Flowを同期して保存する
+    """
+    out_flow_file = out_dir / "flow_ground_truth.h5"
+    if out_flow_file.exists():
+        return
+
+    if not flow_h5_path.exists():
+        # Flowがない場合はスキップ (警告は出す)
+        print(f"Warning: Flow file not found: {flow_h5_path}")
+        return
+
+    with FlowReader(flow_h5_path) as flow_reader:
+        # Flowデータの形状を取得
+        try:
+            sample_flow = flow_reader.h5f['flow'][0]
+        except Exception as e:
+            print(f"Error reading flow data from {flow_h5_path}: {e}")
+            return
+            
+        h, w, c = sample_flow.shape
+        num_frames = len(target_timestamps_us)
+        
+        # 出力用H5作成 (in_progressを使用)
+        out_flow_file_in_progress = out_dir / (out_flow_file.stem + '_in_progress' + out_flow_file.suffix)
+        
+        with h5py.File(str(out_flow_file_in_progress), 'w') as f_out:
+            dset = f_out.create_dataset('flow', shape=(num_frames, h, w, c), 
+                                      dtype='float32', chunks=(1, h, w, c), 
+                                      compression="gzip", compression_opts=4)
+            dset_ts = f_out.create_dataset('timestamps', data=target_timestamps_us)
+
+            for i, ts in enumerate(target_timestamps_us):
+                synced_flow = flow_reader.get_nearest_flow(ts)
+                dset[i] = synced_flow
+
+    os.rename(out_flow_file_in_progress, out_flow_file)
+
 
 def process_sequence(dataset: str,
                      filter_cfg: DictConfig,
@@ -513,12 +568,12 @@ def process_sequence(dataset: str,
     
     in_npy_file = sequence_data[DataKeys.InNPY]
     in_h5_file = sequence_data[DataKeys.InH5]
+    in_flow_h5_file = sequence_data[DataKeys.InFlowH5] # 追加
     out_labels_dir = sequence_data[DataKeys.OutLabelDir]
     out_ev_repr_dir = sequence_data[DataKeys.OutEvReprDir]
     split_type = sequence_data[DataKeys.SplitType]
     
     if not in_npy_file.exists():
-        # print(f"Missing labels for {in_npy_file}")
         return
 
     try:
@@ -536,7 +591,6 @@ def process_sequence(dataset: str,
     except ValueError as e:
         error_msg = f"!!! ERROR in file: {in_npy_file} (Seq: {in_npy_file.parent.parent.name}) !!! -> {e}"
         raise ValueError(error_msg) from e
-
 
     # Labels Saving
     save_labels(out_labels_dir=out_labels_dir, labels_per_frame=labels_per_frame, frame_timestamps_us=frame_timestamps_us)
@@ -558,6 +612,13 @@ def process_sequence(dataset: str,
                                 ev_repr_delta_ts_ms=ev_repr_delta_ts_ms,
                                 ev_repr_timestamps_us=ev_repr_timestamps_us,
                                 overwrite_if_exists=False)
+
+    write_synced_flow(
+        flow_h5_path=in_flow_h5_file,
+        out_dir=out_ev_repr_dir,
+        target_timestamps_us=ev_repr_timestamps_us
+    )
+
 
 # ==========================================
 # Main
@@ -612,12 +673,16 @@ if __name__ == '__main__':
         height = base_h // 2
         width = base_w // 2
         target_h5_filename = "events_ds.h5"
-        print(f"Mode: [Downsample ON] Using '{target_h5_filename}' (Size: {width}x{height})")
+        # Flowファイル名の決定 (downsample時)
+        target_flow_filename = "optical_flow_synced_ds.h5"
+        print(f"Mode: [Downsample ON] Using '{target_h5_filename}' and '{target_flow_filename}' (Size: {width}x{height})")
     else:
         height = base_h
         width = base_w
         target_h5_filename = "events.h5"
-        print(f"Mode: [Standard] Using '{target_h5_filename}' (Size: {width}x{height})")
+        # Flowファイル名の決定 (通常時)
+        target_flow_filename = "optical_flow_synced.h5"
+        print(f"Mode: [Standard] Using '{target_h5_filename}' and '{target_flow_filename}' (Size: {width}x{height})")
 
     if args.filtered_label:
         target_label_suffix = '_filtered'
@@ -642,11 +707,7 @@ if __name__ == '__main__':
         os.makedirs(split_out_dir, exist_ok=True)
 
         for sequence_id in sequence_ids:
-            # ==========================================
-            # 除外リストに含まれているかチェック
-            # ==========================================
             if args.dataset in dirs_to_ignore:
-                # OmegaConfのListConfig内検索、または通常のリスト検索
                 if sequence_id in dirs_to_ignore[args.dataset]:
                     print(f"Ignoring sequence (Blacklisted): {sequence_id}")
                     continue
@@ -655,11 +716,11 @@ if __name__ == '__main__':
             
             npy_file = seq_dir / "labels" / f"labels_bbox{target_label_suffix}.npy"
             h5f_path = seq_dir / "events" / target_h5_filename
+            flow_h5_path = seq_dir / "optical_flow_processed" / target_flow_filename
 
             if not npy_file.exists():
                 continue
             
-            # 指定されたH5が存在しない場合はスキップ
             if not h5f_path.exists():
                 continue
 
@@ -674,6 +735,7 @@ if __name__ == '__main__':
             sequence_data = {
                 DataKeys.InNPY: npy_file,
                 DataKeys.InH5: h5f_path,
+                DataKeys.InFlowH5: flow_h5_path,
                 DataKeys.OutLabelDir: out_labels_path,
                 DataKeys.OutEvReprDir: out_ev_repr_path,
                 DataKeys.SplitType: split_name_2_type[split_name],
