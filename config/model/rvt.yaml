@@ -8,7 +8,7 @@ backbone:
   input_channels: 20
   enable_masking: False
   partition_split_32: 2
-  embed_dim: 64
+  embed_dim: 32
   dim_multiplier: [1, 2, 4, 8]
   num_blocks: [1, 1, 1, 1]
   T_max_chrono_init: [4, 8, 16, 32]
@@ -46,7 +46,7 @@ fpn:
     enable: False
     args:
       mode: reduce-overhead
-  depth: 0.67 
+  depth: 0.33
   in_stages: [2, 3, 4]
   depthwise: False
   act: "silu"
