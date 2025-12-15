@@ -222,7 +222,7 @@ def create_labels_from_sequence(seq: SequenceDir, args):
         
         # GNSSデータにフレームIDが存在するか確認
         if frame_id not in frame_map:
-            missing_frames.append(frame_id) # ★リストに追加
+            missing_frames.append(frame_id) 
             continue
             
         ts_us = frame_map[frame_id]

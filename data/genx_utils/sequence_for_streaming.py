@@ -86,6 +86,7 @@ class SequenceForIter(SequenceBase):
         self.length = len(self.start_indices)
 
         self._padding_representation = None
+        self._padding_flow = None
 
     @staticmethod
     def get_sequences_with_guaranteed_labels(
@@ -120,15 +121,25 @@ class SequenceForIter(SequenceBase):
             ev_repr = self._get_event_repr_torch(start_idx=0, end_idx=1)[0]
             self._padding_representation = torch.zeros_like(ev_repr)
         return self._padding_representation
+    
+    @property
+    def padding_flow(self) -> torch.Tensor:
+        if self._padding_flow is None:
+            ev_repr = self.padding_representation
+            h, w = ev_repr.shape[-2], ev_repr.shape[-1]
+            self._padding_flow = torch.zeros((2, h, w), dtype=torch.float32)
+        return self._padding_flow
 
     def get_fully_padded_sample(self) -> LoaderDataDictGenX:
         is_first_sample = False
         is_padded_mask = [True] * self.seq_len
         ev_repr = [self.padding_representation] * self.seq_len
+        flow = [self.padding_flow] * self.seq_len
         labels = [None] * self.seq_len
         sparse_labels = SparselyBatchedObjectLabels(sparse_object_labels_batch=labels)
         out = {
             DataType.EV_REPR: ev_repr,
+            DataType.FLOW: flow,
             DataType.OBJLABELS_SEQ: sparse_labels,
             DataType.IS_FIRST_SAMPLE: is_first_sample,
             DataType.IS_PADDED_MASK: is_padded_mask,
@@ -157,6 +168,15 @@ class SequenceForIter(SequenceBase):
         assert len(ev_repr) == sample_len
         ###########################
 
+        # flow ###
+        if self.has_flow:
+            with Timer(timer_name='read flow'):
+                flow = self._get_flow_torch(start_idx=start_idx, end_idx=end_idx)
+            assert len(flow) == sample_len
+        else:
+            flow = [self.padding_flow] * sample_len
+        ##################
+
         # labels ###
         labels = list()
         for repr_idx in range(start_idx, end_idx):
@@ -170,6 +190,7 @@ class SequenceForIter(SequenceBase):
 
             is_padded_mask.extend([True] * padding_len)
             ev_repr.extend([self.padding_representation] * padding_len)
+            flow.extend([self.padding_flow] * padding_len)  
             labels.extend([None] * padding_len)
         ##################################
 
@@ -178,6 +199,7 @@ class SequenceForIter(SequenceBase):
 
         out = {
             DataType.EV_REPR: ev_repr,
+            DataType.FLOW: flow,
             DataType.OBJLABELS_SEQ: sparse_labels,
             DataType.IS_FIRST_SAMPLE: is_first_sample,
             DataType.IS_PADDED_MASK: is_padded_mask,

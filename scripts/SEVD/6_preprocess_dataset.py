@@ -568,7 +568,7 @@ def process_sequence(dataset: str,
     
     in_npy_file = sequence_data[DataKeys.InNPY]
     in_h5_file = sequence_data[DataKeys.InH5]
-    in_flow_h5_file = sequence_data[DataKeys.InFlowH5] # 追加
+    in_flow_h5_file = sequence_data[DataKeys.InFlowH5] 
     out_labels_dir = sequence_data[DataKeys.OutLabelDir]
     out_ev_repr_dir = sequence_data[DataKeys.OutEvReprDir]
     split_type = sequence_data[DataKeys.SplitType]

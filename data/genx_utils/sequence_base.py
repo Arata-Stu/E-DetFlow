@@ -35,6 +35,7 @@ class SequenceBase(MapDataPipe):
     ├── event_representations_v2
     │ └── ev_representation_name
     │     ├── event_representations.h5
+    │     ├── flow_ground_truth.h5
     │     ├── objframe_idx_2_repr_idx.npy
     │     └── timestamps_us.npy
     └── labels_v2
@@ -71,6 +72,9 @@ class SequenceBase(MapDataPipe):
         self.ev_repr_file = ev_repr_dir / f'event_representations{ds_factor_str}.h5'
         assert self.ev_repr_file.exists(), f'{str(self.ev_repr_file)=}'
 
+        self.flow_file = ev_repr_dir / 'flow_ground_truth.h5'
+        self.has_flow = self.flow_file.exists()
+
         with Timer(timer_name='prepare labels'):
             label_data = np.load(str(labels_dir / 'labels.npz'))
             objframe_idx_2_label_idx = label_data['objframe_idx_2_label_idx']
@@ -104,6 +108,21 @@ class SequenceBase(MapDataPipe):
         # remove first dim that is always 1 due to how torch.split works
         ev_repr = [x[0] for x in ev_repr]
         return ev_repr
+    
+    def _get_flow_torch(self, start_idx: int, end_idx: int) -> List[torch.Tensor]:
+        assert end_idx > start_idx
+        if not self.has_flow:
+            raise FileNotFoundError(f"Flow file not found: {self.flow_file}")
+
+        with h5py.File(str(self.flow_file), 'r') as h5f:
+            flow_data = h5f['flow'][start_idx:end_idx]
+        
+        flow_tensor = torch.from_numpy(flow_data) # (N, H, W, 2) 
+        flow_tensor = flow_tensor.permute(0, 3, 1, 2).float() # (N, H, W, 2) -> (N, 2, H, W)
+        flow_list = torch.split(flow_tensor, 1, dim=0)
+        flow_list = [x[0] for x in flow_list]
+        
+        return flow_list
 
     def __len__(self) -> int:
         raise NotImplementedError

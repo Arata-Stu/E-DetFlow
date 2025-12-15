@@ -5,6 +5,7 @@ from warnings import filterwarnings, warn
 
 import torch as th
 import torch.distributions.categorical
+import numpy as np
 from omegaconf import DictConfig
 from torch.nn.functional import interpolate
 from torchvision.transforms import InterpolationMode
@@ -138,17 +139,21 @@ class RandomSpatialAugmentorGenX:
         assert len(zoom_coordinates_x0y0) == 2
         assert isinstance(input_, th.Tensor)
 
-        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR:
-            assert input_.ndim == 3, f'{input_.shape=}'
+        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.FLOW:
+            assert input_.ndim == 3 or input_.ndim == 4, f'{input_.shape=}'
             height, width = input_.shape[-2:]
             zoom_window_h, zoom_window_w = int(height / zoom_out_factor), int(width / zoom_out_factor)
+            
             zoom_window = interpolate(input_.unsqueeze(0), size=(zoom_window_h, zoom_window_w), mode='nearest-exact')[0]
-            output = th.zeros_like(input_)
+            
+            if datatype == DataType.FLOW:
+                zoom_window = zoom_window / zoom_out_factor
 
+            output = th.zeros_like(input_)
             x0, y0 = zoom_coordinates_x0y0
             assert x0 >= 0
             assert y0 >= 0
-            output[:, y0:y0 + zoom_window_h, x0:x0 + zoom_window_w] = zoom_window
+            output[..., y0:y0 + zoom_window_h, x0:x0 + zoom_window_w] = zoom_window
             return output
         raise NotImplementedError
 
@@ -207,17 +212,22 @@ class RandomSpatialAugmentorGenX:
         assert len(zoom_coordinates_x0y0) == 2
         assert isinstance(input_, th.Tensor)
 
-        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR:
-            assert input_.ndim == 3, f'{input_.shape=}'
+        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.FLOW:
+            assert input_.ndim == 3 or input_.ndim == 4, f'{input_.shape=}' # Flowは(N, 2, H, W)等の可能性あり
             height, width = input_.shape[-2:]
             zoom_window_h, zoom_window_w = int(height / zoom_in_factor), int(width / zoom_in_factor)
 
             x0, y0 = zoom_coordinates_x0y0
             assert x0 >= 0
             assert y0 >= 0
+            
             zoom_canvas = input_[..., y0:y0 + zoom_window_h, x0:x0 + zoom_window_w].unsqueeze(0)
             output = interpolate(zoom_canvas, size=(height, width), mode='nearest-exact')
             output = output[0]
+            
+            if datatype == DataType.FLOW:
+                output = output * zoom_in_factor
+
             return output
         raise NotImplementedError
 
@@ -256,8 +266,25 @@ class RandomSpatialAugmentorGenX:
     @staticmethod
     def _rotate_tensor(input_: Any, angle_deg: float, datatype: DataType):
         assert isinstance(input_, th.Tensor)
-        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR:
-            return rotate(input_, angle=angle_deg, interpolation=InterpolationMode.NEAREST)
+        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.FLOW:
+            out = rotate(input_, angle=angle_deg, interpolation=InterpolationMode.NEAREST)
+
+            if datatype == DataType.FLOW:
+                assert out.shape[-3] == 2
+                theta = np.deg2rad(angle_deg)
+                cos_t = np.cos(theta)
+                sin_t = np.sin(theta)
+
+                flow_u = out[..., 0, :, :]
+                flow_v = out[..., 1, :, :]
+
+                u_new = flow_u * cos_t + flow_v * sin_t
+                v_new = -flow_u * sin_t + flow_v * cos_t
+
+                out[..., 0, :, :] = u_new
+                out[..., 1, :, :] = v_new
+            
+            return out
         raise NotImplementedError
 
     @classmethod
