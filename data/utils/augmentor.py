@@ -75,7 +75,6 @@ class RandomSpatialAugmentorGenX:
         assert 0 <= zoom_out_weight
         assert self.max_zoom_out_factor >= self.min_zoom_out_factor >= 1
         if not automatic_randomization:
-            # We are probably applying augmentation to a streaming dataset for which zoom in augm is not supported.
             assert zoom_in_weight == 0, f'{zoom_in_weight=}'
 
         self.zoom_in_or_out_distribution = torch.distributions.categorical.Categorical(
@@ -88,12 +87,6 @@ class RandomSpatialAugmentorGenX:
             zoom_out=ZoomOutState(active=False, x0=0, y0=0, zoom_out_factor=1.0))
 
     def randomize_augmentation(self):
-        """Sample new augmentation parameters that will be consistently applied among the items.
-
-        This function only works with augmentations that are input-independent.
-        E.g. The zoom-in augmentation parameters depend on the labels and cannot be sampled in this function.
-        For the same reason, it is not a very reasonable augmentation for the streaming scenario.
-        """
         self.augm_state.apply_h_flip = self.h_flip_prob > th.rand(1).item()
 
         self.augm_state.rotation.active = self.rot_prob > th.rand(1).item()
@@ -102,7 +95,6 @@ class RandomSpatialAugmentorGenX:
             self.augm_state.rotation.angle_deg = sign * torch_uniform_sample_scalar(
                 min_value=self.rot_min_angle_deg, max_value=self.rot_max_angle_deg)
 
-        # Zoom in and zoom out is mutually exclusive.
         do_zoom = self.zoom_prob > th.rand(1).item()
         do_zoom_in = self.zoom_in_or_out_distribution.sample().item() == 0
         do_zoom_out = not do_zoom_in
@@ -139,7 +131,7 @@ class RandomSpatialAugmentorGenX:
         assert len(zoom_coordinates_x0y0) == 2
         assert isinstance(input_, th.Tensor)
 
-        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.FLOW:
+        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.FLOW or datatype == 'valid':
             assert input_.ndim == 3 or input_.ndim == 4, f'{input_.shape=}'
             height, width = input_.shape[-2:]
             zoom_window_h, zoom_window_w = int(height / zoom_out_factor), int(width / zoom_out_factor)
@@ -153,6 +145,7 @@ class RandomSpatialAugmentorGenX:
             x0, y0 = zoom_coordinates_x0y0
             assert x0 >= 0
             assert y0 >= 0
+            # Place the zoomed content. Outside area remains 0 (invalid for 'valid' mask).
             output[..., y0:y0 + zoom_window_h, x0:x0 + zoom_window_w] = zoom_window
             return output
         raise NotImplementedError
@@ -197,6 +190,7 @@ class RandomSpatialAugmentorGenX:
         if latest_objframe is None:
             warn(message=NO_LABEL_WARN_MSG, category=UserWarning, stacklevel=2)
             return data_dict
+
         x0_sampled, y0_sampled = randomly_sample_zoom_window_from_objframe(
             objframe=latest_objframe, zoom_window_height=zoom_window_h, zoom_window_width=zoom_window_w)
 
@@ -212,8 +206,8 @@ class RandomSpatialAugmentorGenX:
         assert len(zoom_coordinates_x0y0) == 2
         assert isinstance(input_, th.Tensor)
 
-        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.FLOW:
-            assert input_.ndim == 3 or input_.ndim == 4, f'{input_.shape=}' # Flowは(N, 2, H, W)等の可能性あり
+        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.FLOW or datatype == 'valid':
+            assert input_.ndim == 3 or input_.ndim == 4, f'{input_.shape=}' 
             height, width = input_.shape[-2:]
             zoom_window_h, zoom_window_w = int(height / zoom_in_factor), int(width / zoom_in_factor)
 
@@ -266,7 +260,7 @@ class RandomSpatialAugmentorGenX:
     @staticmethod
     def _rotate_tensor(input_: Any, angle_deg: float, datatype: DataType):
         assert isinstance(input_, th.Tensor)
-        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.FLOW:
+        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.FLOW or datatype == 'valid':
             out = rotate(input_, angle=angle_deg, interpolation=InterpolationMode.NEAREST)
 
             if datatype == DataType.FLOW:
@@ -315,13 +309,13 @@ class RandomSpatialAugmentorGenX:
     def _flip_tensor(input_: Any, flip_type: str, datatype: DataType):
         assert isinstance(input_, th.Tensor)
         flip_axis = -1 if flip_type == 'h' else -2
-        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR:
+        # Added 'valid' to supported datatypes
+        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == 'valid':
             return th.flip(input_, dims=[flip_axis])
         if datatype == DataType.FLOW:
             assert input_.shape[-3] == 2
             flow_idx = 0 if flip_type == 'h' else 1
             input_ = th.flip(input_, dims=[flip_axis])
-            # Also flip the sign of the x (horizontal) or y (vertical) component of the flow.
             input_[..., flow_idx, :, :] = -1 * input_[..., flow_idx, :, :]
             return input_
         raise NotImplementedError
@@ -335,7 +329,6 @@ class RandomSpatialAugmentorGenX:
         if isinstance(input_, ObjectLabels) or isinstance(input_, SparselyBatchedObjectLabels):
             assert datatype == DataType.OBJLABELS or datatype == DataType.OBJLABELS_SEQ
             if flip_type == 'h':
-                # in-place modification
                 input_.flip_lr_()
                 return input_
             else:
@@ -358,7 +351,8 @@ class RandomSpatialAugmentorGenX:
                 hw = v.input_size_hw
                 if hw is not None:
                     _hw = v.input_size_hw
-            elif k in (DataType.IMAGE, DataType.FLOW, DataType.EV_REPR):
+            # Added 'valid' to supported datatypes for shape inference
+            elif k in (DataType.IMAGE, DataType.FLOW, DataType.EV_REPR, 'valid'):
                 _hw = v[0].shape[-2:]
             if _hw is not None:
                 _height, _width = _hw
@@ -372,10 +366,6 @@ class RandomSpatialAugmentorGenX:
         return height, width
 
     def __call__(self, data_dict: LoaderDataDictGenX):
-        """
-        :param data_dict: LoaderDataDictGenX type, image-based tensors must have (*, h, w) shape.
-        :return: map with same keys but spatially augmented values.
-        """
         if self.automatic_randomization:
             self.randomize_augmentation()
 

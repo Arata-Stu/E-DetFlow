@@ -9,9 +9,12 @@ from tqdm import tqdm
 
 from utils.directory import SequenceDir
 
-# ==========================================
-# 1. Helper Functions
-# ==========================================
+COLORS_RGB = {
+    'Sky': (70, 130, 180),
+}
+
+IGNORE_LABELS = ['Sky']
+
 def parse_gnss_timestamps(gnss_file_path: Path):
     frame_to_ts = {}
     pattern = re.compile(r"frame=(\d+),\s*timestamp=([0-9.]+)")
@@ -51,9 +54,34 @@ def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower()
             for text in re.split('([0-9]+)', str(s))]
 
-# ==========================================
-# 2. Core Logic
-# ==========================================
+def generate_mask_with_semantics_color(flow, sem_seg_path, height, width, max_flow=400):
+    mag = np.linalg.norm(flow, axis=2)
+    mask_valid = mag < max_flow
+
+    y_grid, x_grid = np.mgrid[0:height, 0:width]
+    dest_x = x_grid + flow[..., 0]
+    dest_y = y_grid + flow[..., 1]
+    mask_oob = (dest_x >= 0) & (dest_x < width) & (dest_y >= 0) & (dest_y < height)
+    
+    mask_valid = mask_valid & mask_oob
+
+    if sem_seg_path and sem_seg_path.exists():
+        sem_img = cv2.imread(str(sem_seg_path), cv2.IMREAD_COLOR)
+        
+        if sem_img is not None:
+            if sem_img.shape[:2] != (height, width):
+                sem_img = cv2.resize(sem_img, (width, height), interpolation=cv2.INTER_NEAREST)
+
+            for label in IGNORE_LABELS:
+                if label in COLORS_RGB:
+                    target_rgb = COLORS_RGB[label]
+                    target_bgr = target_rgb[::-1]
+                    
+                    is_target_color = np.all(sem_img == target_bgr, axis=2)
+                    mask_valid = mask_valid & (~is_target_color)
+
+    return mask_valid.astype(np.uint8)
+
 def aggregate_optical_flow(seq: SequenceDir, args):
     output_dir = seq.root / "optical_flow_processed"
     suffix = "_ds.h5" if args.downsample else ".h5"
@@ -67,16 +95,13 @@ def aggregate_optical_flow(seq: SequenceDir, args):
         tqdm.write(f"[Skip] Already exists: {output_path.name}")
         return
 
-    # GNSS読み込み
     frame_map = parse_gnss_timestamps(seq.gnss_file)
     if not frame_map:
         tqdm.write(f"[Skip] GNSS missing or invalid: {seq.root.name}")
         return
 
-    # ファイルリスト取得
     flow_files = sorted(list(seq.optical_flow_dir.glob("*.npz")), key=lambda p: natural_sort_key(p.name))
     
-    # 処理対象リスト作成
     target_list = []
     for npz_file in flow_files:
         try:
@@ -86,7 +111,8 @@ def aggregate_optical_flow(seq: SequenceDir, args):
             
         if frame_id in frame_map:
             ts_us = frame_map[frame_id]
-            target_list.append((ts_us, npz_file))
+            sem_path = seq.sem_seg_dir / f"{frame_id}.png"
+            target_list.append((ts_us, npz_file, sem_path))
             
     if not target_list:
         tqdm.write(f"🚫 [Warn] No valid flow data found for {seq.root.name}")
@@ -95,8 +121,7 @@ def aggregate_optical_flow(seq: SequenceDir, args):
     target_list.sort(key=lambda x: x[0])
     num_frames = len(target_list)
 
-    # 形状決定
-    _, first_path = target_list[0]
+    _, first_path, _ = target_list[0]
     sample_flow = load_flow_from_npz(first_path)
     if sample_flow is None:
         return
@@ -108,7 +133,6 @@ def aggregate_optical_flow(seq: SequenceDir, args):
     else:
         final_h, final_w = orig_h, orig_w
 
-    # HDF5書き込み
     desc = f"Writing H5 ({'Half' if args.downsample else 'Full'}) {seq.root.name}"
     compression_args = {"compression": "gzip", "compression_opts": 4}
     
@@ -121,6 +145,14 @@ def aggregate_optical_flow(seq: SequenceDir, args):
                 chunks=(1, final_h, final_w, 2),
                 **compression_args
             )
+
+            dset_valid = h5f.create_dataset(
+                'valid', 
+                shape=(num_frames, final_h, final_w), 
+                dtype='uint8', 
+                chunks=(1, final_h, final_w),
+                **compression_args
+            )
             
             dset_ts = h5f.create_dataset(
                 'timestamps', 
@@ -128,7 +160,7 @@ def aggregate_optical_flow(seq: SequenceDir, args):
                 dtype='int64'
             )
 
-            for i, (ts_us, npz_file) in enumerate(tqdm(target_list, desc=desc, leave=False)):
+            for i, (ts_us, npz_file, sem_path) in enumerate(tqdm(target_list, desc=desc, leave=False)):
                 flow_data = load_flow_from_npz(npz_file)
                 
                 if flow_data is None:
@@ -138,7 +170,10 @@ def aggregate_optical_flow(seq: SequenceDir, args):
                     flow_data = cv2.resize(flow_data, (final_w, final_h), interpolation=cv2.INTER_AREA)
                     flow_data = flow_data * 0.5
                 
+                valid_mask = generate_mask_with_semantics_color(flow_data, sem_path, final_h, final_w)
+
                 dset_flow[i] = flow_data
+                dset_valid[i] = valid_mask
                 dset_ts[i] = ts_us
 
         size_mb = output_path.stat().st_size / (1024 * 1024)
@@ -149,9 +184,6 @@ def aggregate_optical_flow(seq: SequenceDir, args):
         if output_path.exists():
             output_path.unlink()
 
-# ==========================================
-# 3. Main Loop
-# ==========================================
 def process_dataset(root_dir: Path, args):
     town_dirs = sorted([d for d in root_dir.iterdir() if d.is_dir() and "Town" in d.name])
 

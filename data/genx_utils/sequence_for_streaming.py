@@ -25,21 +25,6 @@ def _scalar_as_1d_array(scalar: Union[int, float]):
 def _get_ev_repr_range_indices(indices: np.ndarray, max_len: int) -> List[Tuple[int, int]]:
     """
     Computes a list of index ranges based on the input array of indices and a maximum length.
-    The index ranges are computed such that the difference between consecutive indices
-    should not exceed the maximum length (max_len).
-
-    Parameters:
-    -----------
-    indices : np.ndarray
-        A NumPy array of indices, where the indices are sorted in ascending order.
-    max_len : int
-        The maximum allowed length between consecutive indices.
-
-    Returns:
-    --------
-    out : List[Tuple[int, int]]
-        A list of tuples, where each tuple contains two integers representing the start and
-        stop indices of the range.
     """
     meta_indices_stop = np.flatnonzero(np.diff(indices) > max_len)
 
@@ -76,7 +61,7 @@ class SequenceForIter(SequenceBase):
             repr_idx_stop = num_ev_repr
         else:
             repr_idx_start, repr_idx_stop = range_indices
-        # Set start idx such that the first label is no further than the last timestamp of the first sample sub-sequence
+        
         min_start_repr_idx = max(self.objframe_idx_2_repr_idx[0] - sequence_length + 1, 0)
         assert 0 <= min_start_repr_idx <= repr_idx_start < repr_idx_stop <= num_ev_repr, \
             f'{min_start_repr_idx=}, {repr_idx_start=}, {repr_idx_stop=}, {num_ev_repr=}, {path=}'
@@ -87,6 +72,7 @@ class SequenceForIter(SequenceBase):
 
         self._padding_representation = None
         self._padding_flow = None
+        self._padding_valid = None
 
     @staticmethod
     def get_sequences_with_guaranteed_labels(
@@ -95,13 +81,9 @@ class SequenceForIter(SequenceBase):
             sequence_length: int,
             dataset_type: DatasetType,
             downsample_by_factor_2: bool) -> List['SequenceForIter']:
-        """Generate sequences such that we do always have labels within each sample of the sequence
-        This is required for training such that we are guaranteed to always have labels in the training step.
-        However, for validation we don't require this if we catch the special case.
-        """
+        
         objframe_idx_2_repr_idx = get_objframe_idx_2_repr_idx(
             path=path, ev_representation_name=ev_representation_name)
-        # max diff for repr idx is sequence length
         range_indices_list = _get_ev_repr_range_indices(indices=objframe_idx_2_repr_idx, max_len=sequence_length)
         sequence_list = list()
         for range_indices in range_indices_list:
@@ -130,16 +112,28 @@ class SequenceForIter(SequenceBase):
             self._padding_flow = torch.zeros((2, h, w), dtype=torch.float32)
         return self._padding_flow
 
+    @property
+    def padding_valid(self) -> torch.Tensor:
+        """有効でないパディング領域のマスクは 0 (無効) とする"""
+        if self._padding_valid is None:
+            ev_repr = self.padding_representation
+            h, w = ev_repr.shape[-2], ev_repr.shape[-1]
+            self._padding_valid = torch.zeros((1, h, w), dtype=torch.float32)
+        return self._padding_valid
+
     def get_fully_padded_sample(self) -> LoaderDataDictGenX:
         is_first_sample = False
         is_padded_mask = [True] * self.seq_len
         ev_repr = [self.padding_representation] * self.seq_len
         flow = [self.padding_flow] * self.seq_len
+        valid = [self.padding_valid] * self.seq_len
         labels = [None] * self.seq_len
         sparse_labels = SparselyBatchedObjectLabels(sparse_object_labels_batch=labels)
+        
         out = {
             DataType.EV_REPR: ev_repr,
             DataType.FLOW: flow,
+            DataType.VALID: valid,
             DataType.OBJLABELS_SEQ: sparse_labels,
             DataType.IS_FIRST_SAMPLE: is_first_sample,
             DataType.IS_PADDED_MASK: is_padded_mask,
@@ -177,6 +171,17 @@ class SequenceForIter(SequenceBase):
             flow = [self.padding_flow] * sample_len
         ##################
 
+        # valid mask ###
+        if self.has_valid:
+            with Timer(timer_name='read valid'):
+                valid = self._get_valid_torch(start_idx=start_idx, end_idx=end_idx)
+            assert len(valid) == sample_len
+        else:
+            ev_h, ev_w = ev_repr[0].shape[-2:]
+            ones_valid = torch.ones((1, ev_h, ev_w), dtype=torch.float32)
+            valid = [ones_valid] * sample_len
+        ################
+
         # labels ###
         labels = list()
         for repr_idx in range(start_idx, end_idx):
@@ -190,7 +195,8 @@ class SequenceForIter(SequenceBase):
 
             is_padded_mask.extend([True] * padding_len)
             ev_repr.extend([self.padding_representation] * padding_len)
-            flow.extend([self.padding_flow] * padding_len)  
+            flow.extend([self.padding_flow] * padding_len)
+            valid.extend([self.padding_valid] * padding_len) # paddingは無効(0)
             labels.extend([None] * padding_len)
         ##################################
 
@@ -200,6 +206,7 @@ class SequenceForIter(SequenceBase):
         out = {
             DataType.EV_REPR: ev_repr,
             DataType.FLOW: flow,
+            DataType.VALID: valid,
             DataType.OBJLABELS_SEQ: sparse_labels,
             DataType.IS_FIRST_SAMPLE: is_first_sample,
             DataType.IS_PADDED_MASK: is_padded_mask,

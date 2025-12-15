@@ -307,18 +307,20 @@ class FlowReader:
         self.h5_file = h5_file
         self.h5f = None
         self.timestamps = None
+        self.has_valid = False
         
     def __enter__(self):
         self.h5f = h5py.File(str(self.h5_file), 'r')
         self.timestamps = np.asarray(self.h5f['timestamps'], dtype='int64')
+        self.has_valid = 'valid' in self.h5f
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.h5f:
             self.h5f.close()
 
-    def get_nearest_flow(self, target_ts_us: int):
-        """指定時刻に最も近いFlowフレームを取得"""
+    def get_nearest_data(self, target_ts_us: int):
+        """指定時刻に最も近いFlowとValid(あれば)を取得"""
         idx = np.searchsorted(self.timestamps, target_ts_us, side="left")
         
         # 境界チェックと最近傍探索
@@ -331,7 +333,10 @@ class FlowReader:
             dt_curr = abs(self.timestamps[idx] - target_ts_us)
             best_idx = idx - 1 if dt_prev < dt_curr else idx
             
-        return self.h5f['flow'][best_idx]
+        flow = self.h5f['flow'][best_idx]
+        valid = self.h5f['valid'][best_idx] if self.has_valid else None
+        
+        return flow, valid
 
 
 # ==========================================
@@ -520,19 +525,17 @@ def write_event_representations(in_h5_file: Path, ev_out_dir: Path, dataset: str
 
 def write_synced_flow(flow_h5_path: Path, out_dir: Path, target_timestamps_us: np.ndarray):
     """
-    イベント表現のタイムスタンプに合わせて、Optical Flowを同期して保存する
+    イベント表現のタイムスタンプに合わせて、Optical FlowとValid Maskを同期して保存する
     """
     out_flow_file = out_dir / "flow_ground_truth.h5"
     if out_flow_file.exists():
         return
 
     if not flow_h5_path.exists():
-        # Flowがない場合はスキップ (警告は出す)
         print(f"Warning: Flow file not found: {flow_h5_path}")
         return
 
     with FlowReader(flow_h5_path) as flow_reader:
-        # Flowデータの形状を取得
         try:
             sample_flow = flow_reader.h5f['flow'][0]
         except Exception as e:
@@ -542,18 +545,27 @@ def write_synced_flow(flow_h5_path: Path, out_dir: Path, target_timestamps_us: n
         h, w, c = sample_flow.shape
         num_frames = len(target_timestamps_us)
         
-        # 出力用H5作成 (in_progressを使用)
         out_flow_file_in_progress = out_dir / (out_flow_file.stem + '_in_progress' + out_flow_file.suffix)
         
         with h5py.File(str(out_flow_file_in_progress), 'w') as f_out:
-            dset = f_out.create_dataset('flow', shape=(num_frames, h, w, c), 
+            dset_flow = f_out.create_dataset('flow', shape=(num_frames, h, w, c), 
                                       dtype='float32', chunks=(1, h, w, c), 
                                       compression="gzip", compression_opts=4)
             dset_ts = f_out.create_dataset('timestamps', data=target_timestamps_us)
 
+            # Validマスクがある場合のみデータセット作成
+            dset_valid = None
+            if flow_reader.has_valid:
+                dset_valid = f_out.create_dataset('valid', shape=(num_frames, h, w), 
+                                          dtype='uint8', chunks=(1, h, w), 
+                                          compression="gzip", compression_opts=4)
+
             for i, ts in enumerate(target_timestamps_us):
-                synced_flow = flow_reader.get_nearest_flow(ts)
-                dset[i] = synced_flow
+                synced_flow, synced_valid = flow_reader.get_nearest_data(ts)
+                dset_flow[i] = synced_flow
+                
+                if dset_valid is not None and synced_valid is not None:
+                    dset_valid[i] = synced_valid
 
     os.rename(out_flow_file_in_progress, out_flow_file)
 
