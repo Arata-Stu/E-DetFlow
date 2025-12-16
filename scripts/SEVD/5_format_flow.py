@@ -10,7 +10,9 @@ from tqdm import tqdm
 from utils.directory import SequenceDir
 
 COLORS_RGB = {
-    'Sky': (70, 130, 180),
+    'Sky':        (70, 130, 180),
+    'Vegetation': (107, 142, 35),
+    'Water':      (45, 60, 150)
 }
 
 IGNORE_LABELS = ['Sky']
@@ -54,9 +56,10 @@ def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower()
             for text in re.split('([0-9]+)', str(s))]
 
-def generate_mask_with_semantics_color(flow, sem_seg_path, height, width, max_flow=400):
+def generate_mask_with_semantics_color(flow, sem_seg_path, height, width, max_flow=400, min_flow=0.1):
     mag = np.linalg.norm(flow, axis=2)
-    mask_valid = mag < max_flow
+    
+    mask_valid = (mag < max_flow) & (mag >= min_flow)
 
     y_grid, x_grid = np.mgrid[0:height, 0:width]
     dest_x = x_grid + flow[..., 0]
@@ -170,7 +173,9 @@ def aggregate_optical_flow(seq: SequenceDir, args):
                     flow_data = cv2.resize(flow_data, (final_w, final_h), interpolation=cv2.INTER_AREA)
                     flow_data = flow_data * 0.5
                 
-                valid_mask = generate_mask_with_semantics_color(flow_data, sem_path, final_h, final_w)
+                valid_mask = generate_mask_with_semantics_color(
+                    flow_data, sem_path, final_h, final_w, min_flow=0.1
+                )
 
                 dset_flow[i] = flow_data
                 dset_valid[i] = valid_mask
