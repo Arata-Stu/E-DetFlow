@@ -18,6 +18,7 @@ class DataType(Enum):
     OBJLABELS = auto()
     OBJLABELS_SEQ = auto()
     IS_PADDED_MASK = auto()
+    VALID = auto()
     IS_FIRST_SAMPLE = auto()
     TOKEN_MASK = auto()
 

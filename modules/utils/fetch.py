@@ -1,12 +1,26 @@
 import lightning as pl
 from omegaconf import DictConfig
 from modules.data.data_module import DataModule 
-from modules.model.rnn_module import  ModelModule as rnn_det_module
+from modules.model.rnn_det_module import  ModelModule as rnn_det_module
+from modules.model.rnn_flow_module import ModelModule as rnn_flow_module
+from modules.model.rnn_flowdet_module import ModelModule as rnn_flowdet_module
 
 def fetch_model_module(config: DictConfig) -> pl.LightningModule:
     model_str = config.model.name
-    if model_str in {'RVT', 'YOLOX_LSTM'}:
-        return rnn_det_module(config)
+    assert config.train_task in {'detection', 'optical_flow', 'flow_and_detection'}
+    
+    if config.train_task == 'detection':
+        if model_str in {'RVT', 'YOLOX_LSTM'}:
+            return rnn_det_module(config)
+        
+    elif config.train_task == 'optical_flow':
+        if model_str in {'RVT', 'YOLOX_LSTM'}:
+            return rnn_flow_module(config)
+        
+    elif config.train_task == 'flow_and_detection':
+        if model_str in {'RVT', 'YOLOX_LSTM'}:
+            return rnn_flowdet_module(config)
+        
     raise NotImplementedError
 
 def fetch_data_module(config: DictConfig) -> pl.LightningDataModule:

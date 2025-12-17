@@ -11,7 +11,6 @@ DT_MS=50
 T_BIN=10
 CHANNEL=20
 SEQUENCE_LENGTH=5
-PROJECT="E-Det_${MODEL}_${DATASET}"
 DOWNSAMPLE=true  # true false
 REPR_TYPE="stacked_histogram"  # stacked_histogram voxel_grid 
 NORM="norm"
@@ -19,6 +18,18 @@ NORM="norm"
 DATA_DIR="/path/to/dataset/"
 GROUP=""
 
+TRAIN_TASK="detection" # detection optical_flow
+
+## train taskに応じてプロジェクト名を変更
+if [ "$TRAIN_TASK" == "detection" ]; then
+    PROJECT_PREFIX="E-Det"
+elif [ "$TRAIN_TASK" == "optical_flow" ]; then
+    PROJECT_PREFIX="E-Flow"
+else
+    echo "Unsupported TRAIN_TASK: $TRAIN_TASK"
+    exit 1
+fi
+PROJECT="${PROJECT_PREFIX}_${MODEL}_${DATASET}"
 
 REPR_NAME="${REPR_TYPE}_dt=${DT_MS}_nbins=${T_BIN}"
 
@@ -42,4 +53,5 @@ batch_size.train=${BATCH_SIZE_PER_GPU} \
 batch_size.eval=${BATCH_SIZE_PER_GPU} \
 wandb.project_name=${PROJECT} \
 wandb.group_name=${GROUP} \
-dataset.downsample_by_factor_2=${DOWNSAMPLE}
+dataset.downsample_by_factor_2=${DOWNSAMPLE} \
++train_task=${TRAIN_TASK}

@@ -4,7 +4,6 @@ from omegaconf import OmegaConf, DictConfig
 
 from .yolo_pafpn import YOLOPAFPN
 from ...yolox.models.yolo_head import YOLOXHead
-from .optical_flow_head import FlowHead
 
 
 def build_yolox_head(head_cfg: DictConfig, in_channels: Tuple[int, ...], strides: Tuple[int, ...]):
@@ -15,12 +14,6 @@ def build_yolox_head(head_cfg: DictConfig, in_channels: Tuple[int, ...], strides
     compile_cfg = head_cfg_dict.pop('compile', None)
     head_cfg_dict.update({"compile_cfg": compile_cfg})
     return YOLOXHead(**head_cfg_dict)
-
-def build_flow_head(flow_head_cfg: DictConfig, in_channels: int):
-    flow_head_cfg_dict = OmegaConf.to_container(flow_head_cfg, resolve=True, throw_on_missing=True)
-    flow_head_cfg_dict.pop('name')
-    flow_head_cfg_dict.update({"in_channels": in_channels})
-    return FlowHead(**flow_head_cfg_dict)
 
 def build_yolox_fpn(fpn_cfg: DictConfig, in_channels: Tuple[int, ...]):
     fpn_cfg_dict = OmegaConf.to_container(fpn_cfg, resolve=True, throw_on_missing=True)
