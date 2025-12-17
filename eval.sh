@@ -12,7 +12,7 @@ T_BIN=10
 CHANNEL=20
 SEQUENCE_LENGTH=5
 DOWNSAMPLE=true  # true false
-REPR_TYPE="voxel_grid"  # stacked_histogram voxel_grid 
+REPR_TYPE="stacked_histogram"  # stacked_histogram voxel_grid 
 NORM="norm"
 
 DATA_DIR="/path/to/dataset/"

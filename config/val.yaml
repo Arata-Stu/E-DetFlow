@@ -10,10 +10,12 @@ training:
   precision: 16
 
 batch_size:
+  train: 12
   eval: 8
 
 hardware:
   num_workers:
+    train: 8
     eval: 4
   gpus: 0 
 
