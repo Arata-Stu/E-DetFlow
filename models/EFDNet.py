@@ -8,14 +8,15 @@ try:
 except ImportError:
     th_compile = None
 
-from ...recurrent_backbone import build_recurrent_backbone
-from .build import build_yolox_fpn, build_flow_head, build_yolox_head 
+from .detection.recurrent_backbone import build_recurrent_backbone
+from .detection.yolox_extension.models.build import build_yolox_fpn, build_yolox_head 
+from .flow.build import build_flow_head
 from utils.timers import TimerDummy as CudaTimer
 
 from data.utils.types import BackboneFeatures, LstmStates
 
 
-class YoloXMultiTaskDetector(th.nn.Module):
+class EFDNet(th.nn.Module):
     def __init__(self,
                  model_cfg: DictConfig):
         super().__init__()
@@ -57,7 +58,6 @@ class YoloXMultiTaskDetector(th.nn.Module):
         # --- Flow Branch ---
         with CudaTimer(device=device, timer_name="Head: Flow"):
             if self.training:
-                # FlowHeadは {'loss_flow': tensor} を返す
                 flow_out, flow_loss_dict = self.flow_head(
                     fpn_features, flow_gt=flow_gt, valid_mask=valid_mask
                 )
@@ -71,8 +71,6 @@ class YoloXMultiTaskDetector(th.nn.Module):
         # --- Detection Branch ---
         with CudaTimer(device=device, timer_name="Head: Detection"):
             if self.training:
-                # YOLOXHeadは {'loss': ..., 'iou_loss': ..., ...} を返す
-                # 引数名は 'labels' である点に注意
                 det_out, det_loss_dict = self.det_head(
                     fpn_features, det_targets
                 )
