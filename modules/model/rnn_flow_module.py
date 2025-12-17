@@ -9,7 +9,7 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 from utils.evaluation.optical_flow.eval import compute_flow_metrics 
 
 from data.utils.types import DataType, LstmStates, DatasetSamplingMode
-from models.detection.yolox_extension.models.flow_estimator import FlowEstimator
+from models.flow.flow_estimator import FlowEstimator
 from utils.padding import InputPadderFromShape
 from modules.utils.detection import BackboneFeatureSelector, RNNStates, Mode, mode_2_string, \
     merge_mixed_batches
@@ -34,7 +34,6 @@ class ModelModule(pl.LightningModule):
         }
 
     def setup(self, stage: Optional[str] = None) -> None:
-        # PropheseeEvaluatorの初期化ロジックを全て削除
         self.mode_2_hw: Dict[Mode, Optional[Tuple[int, int]]] = {}
         self.mode_2_batch_size: Dict[Mode, Optional[int]] = {}
         self.mode_2_sampling_mode: Dict[Mode, DatasetSamplingMode] = {}
@@ -48,7 +47,6 @@ class ModelModule(pl.LightningModule):
         
         if stage == 'fit':  # train + val
             self.train_config = self.full_config.training
-            # self.train_metrics_config は不要であれば削除可能ですが、設定ファイル依存のため残しています
             self.train_metrics_config = self.full_config.logging.train.metrics
 
             self.mode_2_sampling_mode[Mode.TRAIN] = dataset_train_sampling

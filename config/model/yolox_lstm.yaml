@@ -42,6 +42,7 @@ head:
   flow:  # フローヘッド用のセクション
     name: FlowHead
     act: "silu"
+    use_intermediate_loss: true  # 中間層の損失を使用する設定
 
 postprocess:
   confidence_threshold: 0.1

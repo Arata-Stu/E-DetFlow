@@ -8,8 +8,9 @@ try:
 except ImportError:
     th_compile = None
 
-from ...recurrent_backbone import build_recurrent_backbone
-from .build import build_yolox_fpn, build_flow_head
+from ..detection.recurrent_backbone import build_recurrent_backbone
+from .build import build_flow_head
+from ..detection.yolox_extension.models.build import build_yolox_fpn
 from utils.timers import TimerDummy as CudaTimer
 
 from data.utils.types import BackboneFeatures, LstmStates
