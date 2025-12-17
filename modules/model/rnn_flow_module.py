@@ -233,16 +233,19 @@ class ModelModule(pl.LightningModule):
             valid_mask=flow_valid_masks   
         )
 
-        pred_last = predictions[-1]
-        gt_last = flow_targets[-1]
-        mask_last = flow_valid_masks[-1]
-
-        metrics = compute_flow_metrics(pred_last, gt_last, mask_last)
+        metrics_list = []
+        for pred, gt, mask in zip(predictions, flow_targets, flow_valid_masks):
+            m = compute_flow_metrics(pred, gt, mask)
+            metrics_list.append(m)
 
         prefix = f'{mode_2_string[mode]}'
         
-        for k, v in metrics.items():
-            self.log(f'{prefix}/{k}', v, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size, sync_dist=True)
+        if len(metrics_list) > 0:
+            keys = metrics_list[0].keys()
+            for k in keys:
+                values = torch.stack([m[k] for m in metrics_list])
+                mean_value = values.mean()
+                self.log(f'{prefix}/{k}', mean_value, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size, sync_dist=True)
 
         self.log(f'{prefix}/loss', losses['loss_flow'], on_step=False, on_epoch=True, batch_size=batch_size, sync_dist=True)
 
