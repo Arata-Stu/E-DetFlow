@@ -166,7 +166,7 @@ def process_dataset_parallel(root_dir: Path, args):
             all_seq_paths.extend(part_dirs)
 
     print(f"Total sequences: {len(all_seq_paths)} | Downsample: {args.downsample}")
-    print(f"Workers: {args.workers or mp.cpu_count()} (Method: spawn)")
+    print(f"Workers: {args.num_workers or mp.cpu_count()} (Method: spawn)")
 
     ctx = mp.get_context('spawn')
     func = partial(aggregate_optical_flow, args=args)
