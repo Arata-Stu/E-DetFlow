@@ -172,7 +172,7 @@ def process_dataset_parallel(root_dir: Path, args):
     func = partial(aggregate_optical_flow, args=args)
 
     results = []
-    with ctx.Pool(processes=args.workers) as pool:
+    with ctx.Pool(processes=args.num_workers) as pool:
         # imap_unordered で進捗を表示
         for res in tqdm(pool.imap_unordered(func, all_seq_paths), total=len(all_seq_paths), desc="Processing"):
             if "✅" not in res and "[Skip]" not in res:
