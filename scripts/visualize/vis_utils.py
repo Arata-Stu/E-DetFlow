@@ -4,34 +4,36 @@ import numpy as np
 from einops import rearrange, reduce
 
 
-LABELMAP_GEN1 = {'car': 0, 'pedestrian': 1}
-LABELMAP_GEN4 = {'pedestrian': 0, 'two wheeler': 1, 'car': 2, 'truck': 3, 'bus': 4, 'traffic sign': 5, 'traffic light': 6}
-LABELMAP_GEN4_SHORT = {'pedestrian': 0, 'two wheeler': 1, 'car': 2}
-LABELMAP_VGA = {'car': 0, 'pedestrian': 1, 'two wheeler': 2, 'truck': 3, 'bus': 4, 'traffic sign': 5, 'traffic light': 6, 'other': 7}
+LABELMAP_GEN1 = {0: 'car', 1: 'pedestrian'}
+LABELMAP_GEN4_SHORT = {0: 'pedestrian', 1: 'two wheeler', 2: 'car'}
+LABELMAP_VGA = {
+    0: 'car', 1: 'pedestrian', 2: 'two wheeler', 3: 'truck',
+    4: 'bus', 5: 'traffic sign', 6: 'traffic light', 7: 'other'
+}
 
-CLASS_MAP_SEVD = {
-    'car': 0, 'van': 0, 'truck': 0,
-    'pedestrian': 1,
-    'cyclist': 2, 'bicycle': 2, 'motorcycle': 2,
-    'misc': 3,
+LABELMAP_SEVD = {
+    0: 'car',           # car, van, truck を統合
+    1: 'pedestrian',    # pedestrian
+    2: 'two wheeler',   # cyclist, bicycle, motorcycle を統合
+    3: 'misc'           # misc
 }
 
 classid2colors = {
-    0: (0, 0, 255),  # ped -> blue (rgb)
-    1: (0, 255, 255),  # 2-wheeler cyan (rgb)
-    2: (255, 255, 0),  # car -> yellow (rgb)
-    3: (255, 0, 0),  # truck -> red (rgb)
-    4: (255, 0, 255),  # bus -> magenta (rgb)
-    5: (0, 255, 0),  # traffic sign -> green (rgb)
-    6: (0, 0, 0),  # traffic light -> black (rgb)
-    7: (255, 255, 255),  # other -> white (rgb)
+    0: (255, 255, 0),    # car -> yellow
+    1: (0, 0, 255),      # pedestrian -> blue
+    2: (0, 255, 255),    # two wheeler -> cyan
+    3: (255, 255, 255),  # misc -> white
+    4: (255, 0, 255),    # bus -> magenta
+    5: (0, 255, 0),      # traffic sign -> green
+    6: (0, 0, 0),        # traffic light -> black
+    7: (200, 200, 200),  # other -> gray
 }
 
 dataset2labelmap = {
     "gen1": LABELMAP_GEN1,
     "gen4": LABELMAP_GEN4_SHORT,
     "VGA": LABELMAP_VGA,
-    "SEVD": CLASS_MAP_SEVD,
+    "SEVD": LABELMAP_SEVD,
 }
 
 dataset2scale = {
@@ -68,66 +70,50 @@ def ev_repr_to_img(x: np.ndarray, repr_type: str = 'histogram'):
     
     return img
 
-def draw_bboxes_with_id(img, boxes, dataset_name: str) -> None:
+def draw_bboxes_with_id(img, boxes, dataset_name: str) -> np.ndarray:
     """
     画像 img にバウンディングボックスを描画する関数
     """
-    # カラーマップの生成（描画に使う色のリスト）
-    colors = cv2.applyColorMap(np.arange(0, 255).astype(np.uint8), cv2.COLORMAP_HSV)
-    colors = [tuple(*item) for item in colors.tolist()]
+    if boxes is None or len(boxes) == 0:
+        return img
 
-    labelmap = dataset2labelmap[dataset_name]
-    scale_multiplier = dataset2scale[dataset_name]
+    labelmap = dataset2labelmap.get(dataset_name, LABELMAP_VGA)
+    scale_multiplier = dataset2scale.get(dataset_name, 1.0)
 
     add_score = True
-    ht, wd, ch = img.shape
-    dim_new_wh = (int(wd * scale_multiplier), int(ht * scale_multiplier))
+    ht, wd, _ = img.shape
+    
     if scale_multiplier != 1:
+        dim_new_wh = (int(wd * scale_multiplier), int(ht * scale_multiplier))
         img = cv2.resize(img, dim_new_wh, interpolation=cv2.INTER_AREA)
     
-    # boxes の各要素は (cls_id, cx, cy, w, h) としてループ
-    if len(boxes[0]) == 5:
-        for cls_id, cx, cy, w, h in boxes:
+    for box in boxes:
+        if len(box) == 5:
+            cls_id, cx, cy, w, h = box
             score = 1.0
-
-            # (cx, cy) を中心座標とした左上座標を計算
-            pt1 = (int(cx - w / 2), int(cy - h / 2))
-            pt2 = (int(cx + w / 2), int(cy + h / 2))
-            bbox = (pt1[0], pt1[1], pt2[0], pt2[1])
-
-            # スケール補正
-            bbox = tuple(int(x * scale_multiplier) for x in bbox)
-
-            class_id = int(cls_id)
-            class_name = labelmap[class_id % len(labelmap)]
-            bbox_txt = class_name
-            if add_score:
-                bbox_txt += f' {score:.2f}'
-            color_tuple_rgb = classid2colors[class_id]
-            img = bbv.draw_rectangle(img, bbox, bbox_color=color_tuple_rgb)
-            img = bbv.add_label(img, bbox_txt, bbox, text_bg_color=color_tuple_rgb, top=True)
-
-    elif len(boxes[0]) == 7:
-        for x1, y1, x2, y2, obj_conf, class_conf, class_id in boxes:
+            x1, y1, x2, y2 = int(cx - w / 2), int(cy - h / 2), int(cx + w / 2), int(cy + h / 2)
+        elif len(box) == 7:
+            x1, y1, x2, y2, obj_conf, class_conf, cls_id = box
             score = obj_conf * class_conf
+        else:
+            continue
 
-            pt1 = (int(x1), int(y1))
-            pt2 = (int(x2), int(y2))
-            bbox = (pt1[0], pt1[1], pt2[0], pt2[1])
+        # スケール補正と座標のタプル化
+        bbox = (int(x1 * scale_multiplier), int(y1 * scale_multiplier), 
+                int(x2 * scale_multiplier), int(y2 * scale_multiplier))
 
-            bbox = tuple(int(x * scale_multiplier) for x in bbox)
+        class_id = int(cls_id)
+        # 修正ポイント: .get() を使って安全に名前を取得
+        class_name = labelmap.get(class_id, f"ID:{class_id}")
+        
+        bbox_txt = f"{class_name} {score:.2f}" if add_score else class_name
+        
+        # 色の取得 (デフォルトは白)
+        color = classid2colors.get(class_id, (255, 255, 255))
+        
+        img = bbv.draw_rectangle(img, bbox, bbox_color=color)
+        img = bbv.add_label(img, bbox_txt, bbox, text_bg_color=color, top=True)
 
-            class_id = int(class_id)
-            class_name = labelmap[class_id % len(labelmap)]
-            bbox_txt = class_name
-            if add_score:
-                bbox_txt += f' {score:.2f}'
-            color_tuple_rgb = classid2colors[class_id]
-            img = bbv.draw_rectangle(img, bbox, bbox_color=color_tuple_rgb)
-            img = bbv.add_label(img, bbox_txt, bbox, text_bg_color=color_tuple_rgb, top=True)
-    else:
-        raise ValueError("Invalid boxes format")
-    
     return img
 
 
