@@ -5,16 +5,19 @@ from typing import Tuple, Optional, Dict, List
 
 from ..detection.yolox.models.network_blocks import BaseConv 
 
+import torch
+import torch.nn.functional as F
+from typing import List, Dict, Optional
+
 def sequence_loss(
     flow_preds: List[torch.Tensor], 
     flow_gt: torch.Tensor, 
     valid_mask: Optional[torch.Tensor] = None, 
     gamma: float = 0.8,
-    use_intermediate_loss: bool = True
+    use_intermediate_loss: bool = True,
+    loss_type: str = 'l2'  
 ) -> Dict[str, torch.Tensor]:
-    """
-    各解像度ごとの損失を個別に計算し、辞書で返します。
-    """
+    
     if flow_gt is None or flow_gt.shape[0] == 0:
         return {"loss_flow": torch.tensor(0.0, device=flow_preds[0].device)}
 
@@ -38,25 +41,30 @@ def sequence_loss(
 
         b, _, h, w = pred_flow.shape
         
-        # Ground TruthとMaskを各層のサイズにリサイズ
+        # Ground TruthとMaskを各予測の解像度にリサイズ
         gt_downsampled = F.interpolate(flow_gt, size=(h, w), mode='bilinear', align_corners=False)
         mask_downsampled = F.interpolate(valid_mask.float(), size=(h, w), mode='bilinear', align_corners=False)
         
-        # L1-norm (Robust loss) の計算
         flow_diff = pred_flow - gt_downsampled
-        loss_map = torch.sqrt(flow_diff.pow(2).sum(dim=1, keepdim=True) + epsilon)
 
+        # --- 損失計算の切り替え ---
+        if loss_type == 'l1':
+            loss_map = flow_diff.abs().sum(dim=1, keepdim=True)
+        elif loss_type == 'l2':
+            loss_map = torch.sqrt(flow_diff.pow(2).sum(dim=1, keepdim=True) + epsilon)
+        else:
+            raise ValueError(f"Invalid loss_type: {loss_type}. Choose 'l1' or 'l2'.")
+
+        # マスクの適用と平均化
         weighted_loss = loss_map * mask_downsampled
         num_valid_pixels = mask_downsampled.sum() + epsilon
         loss = weighted_loss.sum() / num_valid_pixels
-        results[f"loss_flow_stage_{i}"] = loss
         
-        # 重み付き合計
+        results[f"loss_flow_stage_{i}"] = loss
         total_loss += loss_weights[i] * loss
 
     results["loss_flow"] = total_loss
     return results
-
 
 class FlowHead(nn.Module):
     def __init__(
