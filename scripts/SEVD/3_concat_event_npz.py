@@ -244,7 +244,7 @@ if __name__ == "__main__":
     parser.add_argument("--downsample", action="store_true", help="Enable 1/2 spatial downsampling")
     parser.add_argument("--width", type=int, default=1280, help="Original input width (default: 1280)")
     parser.add_argument("--height", type=int, default=960, help="Original input height (default: 960)")
-    parser.add_argument("--workers", type=int, default=0, help="Number of workers (default: CPU_COUNT - 2)")
+    parser.add_argument("--num_workers", type=int, default=0, help="Number of workers (default: CPU_COUNT - 2)")
     
     args = parser.parse_args()
     
