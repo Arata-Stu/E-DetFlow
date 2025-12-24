@@ -1,5 +1,6 @@
 name: ???
 path: ???
+use_flow: False
 train:
   sampling: 'mixed' # ('random', 'stream', 'mixed')
   random:

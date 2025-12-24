@@ -49,12 +49,14 @@ class SequenceBase(MapDataPipe):
                  sequence_length: int,
                  dataset_type: DatasetType,
                  downsample_by_factor_2: bool,
-                 only_load_end_labels: bool):
+                 only_load_end_labels: bool,
+                 use_flow:  bool = False):
         assert sequence_length >= 1
         assert path.is_dir()
         assert dataset_type in {DatasetType.GEN1, DatasetType.GEN4, DatasetType.VGA, DatasetType.SEVD}, f'{dataset_type} not implemented'
 
         self.only_load_end_labels = only_load_end_labels
+        self.use_flow = use_flow
 
         ev_repr_dir = get_event_representation_dir(path=path, ev_representation_name=ev_representation_name)
 
@@ -75,6 +77,10 @@ class SequenceBase(MapDataPipe):
         self.flow_file = ev_repr_dir / 'flow_ground_truth.h5'
         self.has_flow = self.flow_file.exists()
 
+        self.has_valid = False
+        self.flow_file = ev_repr_dir / 'flow_ground_truth.h5'
+        self.has_flow = self.use_flow and self.flow_file.exists()
+        
         self.has_valid = False
         if self.has_flow:
             # Check if 'valid' dataset exists in the file
@@ -119,19 +125,17 @@ class SequenceBase(MapDataPipe):
         ev_repr = [x[0] for x in ev_repr]
         return ev_repr
     
-    def _get_flow_torch(self, start_idx: int, end_idx: int) -> List[torch.Tensor]:
-        assert end_idx > start_idx
+    def _get_flow_torch(self, start_idx: int, end_idx: int) -> Optional[List[torch.Tensor]]:
         if not self.has_flow:
-            raise FileNotFoundError(f"Flow file not found: {self.flow_file}")
+            return None
 
+        assert end_idx > start_idx
         with h5py.File(str(self.flow_file), 'r') as h5f:
             flow_data = h5f['flow'][start_idx:end_idx]
         
-        flow_tensor = torch.from_numpy(flow_data) # (N, H, W, 2) 
-        flow_tensor = flow_tensor.permute(0, 3, 1, 2).float() # (N, H, W, 2) -> (N, 2, H, W)
-        flow_list = torch.split(flow_tensor, 1, dim=0)
-        flow_list = [x[0] for x in flow_list]
-        
+        flow_tensor = torch.from_numpy(flow_data)
+        flow_tensor = flow_tensor.permute(0, 3, 1, 2).float()
+        flow_list = [x[0] for x in torch.split(flow_tensor, 1, dim=0)]
         return flow_list
     
     def _get_valid_torch(self, start_idx: int, end_idx: int) -> List[torch.Tensor]:
