@@ -71,10 +71,12 @@ class FlowHead(nn.Module):
         self,
         in_channels: Tuple[int, int, int], 
         act: str = "silu",
-        use_intermediate_loss: bool = True  
+        use_intermediate_loss: bool = True,
+        loss_type: str = 'l2'  
     ):
         super().__init__()
         self.use_intermediate_loss = use_intermediate_loss
+        self.loss_type = loss_type
         
         stage3_channels = in_channels[0]
         
@@ -120,7 +122,8 @@ class FlowHead(nn.Module):
                 flow_preds=all_flow_preds, 
                 flow_gt=flow_gt, 
                 valid_mask=valid_mask,
-                use_intermediate_loss=self.use_intermediate_loss 
+                use_intermediate_loss=self.use_intermediate_loss,
+                loss_type=self.loss_type
             )
         
         return flow_1x, losses
