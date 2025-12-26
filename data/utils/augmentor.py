@@ -131,7 +131,7 @@ class RandomSpatialAugmentorGenX:
         assert len(zoom_coordinates_x0y0) == 2
         assert isinstance(input_, th.Tensor)
 
-        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.FLOW or datatype == 'valid':
+        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.FLOW or datatype == DataType.VALID:
             assert input_.ndim == 3 or input_.ndim == 4, f'{input_.shape=}'
             height, width = input_.shape[-2:]
             zoom_window_h, zoom_window_w = int(height / zoom_out_factor), int(width / zoom_out_factor)
@@ -206,7 +206,7 @@ class RandomSpatialAugmentorGenX:
         assert len(zoom_coordinates_x0y0) == 2
         assert isinstance(input_, th.Tensor)
 
-        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.FLOW or datatype == 'valid':
+        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.FLOW or datatype == DataType.VALID:
             assert input_.ndim == 3 or input_.ndim == 4, f'{input_.shape=}' 
             height, width = input_.shape[-2:]
             zoom_window_h, zoom_window_w = int(height / zoom_in_factor), int(width / zoom_in_factor)
@@ -260,7 +260,7 @@ class RandomSpatialAugmentorGenX:
     @staticmethod
     def _rotate_tensor(input_: Any, angle_deg: float, datatype: DataType):
         assert isinstance(input_, th.Tensor)
-        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.FLOW or datatype == 'valid':
+        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.FLOW or datatype == DataType.VALID:
             out = rotate(input_, angle=angle_deg, interpolation=InterpolationMode.NEAREST)
 
             if datatype == DataType.FLOW:
@@ -310,7 +310,7 @@ class RandomSpatialAugmentorGenX:
         assert isinstance(input_, th.Tensor)
         flip_axis = -1 if flip_type == 'h' else -2
         # Added 'valid' to supported datatypes
-        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == 'valid':
+        if datatype == DataType.IMAGE or datatype == DataType.EV_REPR or datatype == DataType.VALID:
             return th.flip(input_, dims=[flip_axis])
         if datatype == DataType.FLOW:
             assert input_.shape[-3] == 2
@@ -352,7 +352,7 @@ class RandomSpatialAugmentorGenX:
                 if hw is not None:
                     _hw = v.input_size_hw
             # Added 'valid' to supported datatypes for shape inference
-            elif k in (DataType.IMAGE, DataType.FLOW, DataType.EV_REPR, 'valid'):
+            elif k in (DataType.IMAGE, DataType.FLOW, DataType.EV_REPR, DataType.VALID):
                 _hw = v[0].shape[-2:]
             if _hw is not None:
                 _height, _width = _hw
