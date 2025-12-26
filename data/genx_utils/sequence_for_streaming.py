@@ -136,14 +136,14 @@ class SequenceForIter(SequenceBase):
         
         out = {
             DataType.EV_REPR: ev_repr,
-            DataType.OBJLABELS_SEQ: SparselyBatchedObjectLabels(sparse_object_labels_batch=labels),
-            DataType.IS_FIRST_SAMPLE: False,
-            DataType.IS_PADDED_MASK: [True] * self.seq_len,
+            DataType.OBJLABELS_SEQ: sparse_labels,
+            DataType.IS_FIRST_SAMPLE: is_first_sample,
+            DataType.IS_PADDED_MASK: is_padded_mask,
         }
         # flowを使う設定の時のみキーを追加
         if self.use_flow:
-            out[DataType.FLOW] = [self.padding_flow] * self.seq_len
-            out[DataType.VALID] = [self.padding_valid] * self.seq_len
+            out[DataType.FLOW] = flow
+            out[DataType.VALID] = valid
 
         return out
 
