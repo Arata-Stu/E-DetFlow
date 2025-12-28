@@ -231,19 +231,21 @@ class ModelModule(pl.LightningModule):
             valid_mask=flow_valid_masks   
         )
 
-        metrics_list = []
-        for pred, gt, mask in zip(predictions, flow_targets, flow_valid_masks):
-            m = compute_flow_metrics(pred, gt, mask)
-            metrics_list.append(m)
+        full_gt = torch.cat(flow_targets, dim=0).to(predictions.device)
+        full_mask = torch.cat(flow_valid_masks, dim=0).to(predictions.device)
+
+        metrics = compute_flow_metrics(predictions, full_gt, full_mask)
 
         prefix = f'{mode_2_string[mode]}'
         
-        if len(metrics_list) > 0:
-            keys = metrics_list[0].keys()
-            for k in keys:
-                values = torch.stack([m[k] for m in metrics_list])
-                mean_value = values.mean()
-                self.log(f'{prefix}/{k}', mean_value, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size, sync_dist=True)
+        # ログ出力処理
+        if metrics:
+            for k, v in metrics.items():
+                val = v.mean() if isinstance(v, torch.Tensor) and v.dim() > 0 else v
+                self.log(f'{prefix}/{k}', val, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size, sync_dist=True)
+
+        if losses is not None and 'loss_flow' in losses:
+            self.log(f'{prefix}/loss', losses['loss_flow'], on_step=False, on_epoch=True, batch_size=batch_size, sync_dist=True)
 
         return None
 
