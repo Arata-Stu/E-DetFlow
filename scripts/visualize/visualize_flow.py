@@ -98,12 +98,17 @@ def create_video_flow(data: pl.LightningDataModule,
                 ev_tensors = ev_repr[tidx].to(torch.float32).to(device)
                 ev_tensors_padded = input_padder.pad_tensor_ev_repr(ev_tensors)
                 
-                flow_pred, _, prev_states = model.forward(ev_tensors_padded, prev_states)
-                flow_gt = flow_gt_seq[tidx][0]
+                flow_pred, _, states = model.forward(ev_tensors_padded, prev_states)
+                prev_states = states
+                
+                orig_h, orig_w = ev_tensors.shape[-2:]
+                flow_pred = flow_pred[..., :orig_h, :orig_w]
 
-                img = visualize_flow(ev_tensors[0], flow_pred, flow_gt)
+                flow_gt = flow_gt_seq[tidx][0].to(device)
+
+                img = visualize_flow(ev_tensors[0], flow_pred[0], flow_gt)
                 video_writer.write(img)
-
+                
     video_writer.release()
     print(f"\nVideo successfully saved to: {output_path}")
 
