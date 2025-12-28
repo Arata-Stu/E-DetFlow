@@ -74,12 +74,12 @@ class ModelModule(pl.LightningModule):
     def forward(self,
                 event_tensor: th.Tensor,
                 previous_states: Optional[LstmStates] = None,
-                retrieve_flows: bool = True,
+                retrieve_flow: bool = True,
                 targets=None) \
             -> Tuple[Union[th.Tensor, None], Union[Dict[str, th.Tensor], None], LstmStates]:
         return self.mdl(x=event_tensor,
                         previous_states=previous_states,
-                        retrieve_flows=retrieve_flows,
+                        retrieve_flow=retrieve_flow,
                         targets=targets)
 
     def get_worker_id_from_batch(self, batch: Any) -> int:
@@ -230,7 +230,7 @@ class ModelModule(pl.LightningModule):
             flow_gt=flow_targets,         
             valid_mask=flow_valid_masks   
         )
-        
+
         orig_h, orig_w = flow_targets[0].shape[-2:]
         predictions = predictions[..., :orig_h, :orig_w]
 
