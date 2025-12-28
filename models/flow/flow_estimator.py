@@ -46,6 +46,13 @@ class FlowEstimator(th.nn.Module):
                      valid_mask: Optional[th.Tensor] = None) -> \
             Tuple[th.Tensor, Union[Dict[str, th.Tensor], None]]:
         device = next(iter(backbone_features.values())).device
+
+        if isinstance(flow_gt, list):
+            flow_gt = th.cat(flow_gt, dim=0).to(device) 
+        
+        if isinstance(valid_mask, list):
+            valid_mask = th.cat(valid_mask, dim=0).to(device)
+            
         with CudaTimer(device=device, timer_name="FPN"):
             fpn_features = self.fpn(backbone_features)
         

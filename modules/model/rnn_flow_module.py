@@ -247,7 +247,7 @@ class ModelModule(pl.LightningModule):
 
         self.log(f'{prefix}/loss', losses['loss_flow'], on_step=False, on_epoch=True, batch_size=batch_size, sync_dist=True)
 
-        return {'loss': losses['loss_flow']}
+        return None
 
     def validation_step(self, batch: Any, batch_idx: int) -> Optional[STEP_OUTPUT]:
         return self._val_test_step_impl(batch=batch, mode=Mode.VAL)
