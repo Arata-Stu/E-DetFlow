@@ -75,12 +75,14 @@ class ModelModule(pl.LightningModule):
                 event_tensor: th.Tensor,
                 previous_states: Optional[LstmStates] = None,
                 retrieve_flow: bool = True,
-                targets=None) \
-            -> Tuple[Union[th.Tensor, None], Union[Dict[str, th.Tensor], None], LstmStates]:
+                flow_gt: Optional[th.Tensor] = None,      
+                valid_mask: Optional[th.Tensor] = None): 
+
         return self.mdl(x=event_tensor,
                         previous_states=previous_states,
                         retrieve_flow=retrieve_flow,
-                        targets=targets)
+                        flow_gt=flow_gt,                 
+                        valid_mask=valid_mask)
 
     def get_worker_id_from_batch(self, batch: Any) -> int:
         return batch['worker_id']
