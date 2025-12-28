@@ -112,18 +112,20 @@ class FlowHead(nn.Module):
         flow_2x = self.flow_pred_2x(features_2x)
         flow_1x = self.flow_pred_1x(features_1x)
 
+        if flow_gt is not None:
+            h_orig, w_orig = flow_gt.shape[-2:]
+            flow_1x = flow_1x[..., :h_orig, :w_orig]
+            flow_2x = flow_2x[..., :h_orig//2, :w_orig//2]
+            flow_4x = flow_4x[..., :h_orig//4, :w_orig//4]
+
         losses = None
-        if self.training:
-            assert flow_gt is not None
-            
+        if self.training or flow_gt is not None:
             all_flow_preds = [flow_4x, flow_2x, flow_1x]
-            
             losses = sequence_loss(
                 flow_preds=all_flow_preds, 
                 flow_gt=flow_gt, 
                 valid_mask=valid_mask,
-                use_intermediate_loss=self.use_intermediate_loss,
-                loss_type=self.loss_type
+                use_intermediate_loss=self.use_intermediate_loss 
             )
         
         return flow_1x, losses

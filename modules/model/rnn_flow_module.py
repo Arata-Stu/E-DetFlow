@@ -230,6 +230,9 @@ class ModelModule(pl.LightningModule):
             flow_gt=flow_targets,         
             valid_mask=flow_valid_masks   
         )
+        
+        orig_h, orig_w = flow_targets[0].shape[-2:]
+        predictions = predictions[..., :orig_h, :orig_w]
 
         full_gt = torch.cat(flow_targets, dim=0).to(predictions.device)
         full_mask = torch.cat(flow_valid_masks, dim=0).to(predictions.device)
