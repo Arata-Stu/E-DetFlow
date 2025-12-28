@@ -52,11 +52,11 @@ class FlowEstimator(th.nn.Module):
         if self.training:
             assert flow_gt is not None
             with CudaTimer(device=device, timer_name="HEAD + Loss"):
-                outputs, losses = self.flow_head(fpn_features, flow_gt=flow_gt, valid_mask=valid_mask)
+                outputs, losses = self.flow_head(fpn_features[0], flow_gt=flow_gt, valid_mask=valid_mask)
             return outputs, losses
         
         with CudaTimer(device=device, timer_name="HEAD"):
-            outputs, losses = self.flow_head(fpn_features)
+            outputs, losses = self.flow_head(fpn_features[0])
         assert losses is None
         return outputs, losses
 
