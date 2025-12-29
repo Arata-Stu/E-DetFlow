@@ -19,24 +19,30 @@ from vis_utils import dataset2size, ev_repr_to_img, flow_to_image
 
 
 def visualize_flow(ev_tensors: torch.Tensor, 
-                             flow_pred: torch.Tensor, 
-                             flow_gt: torch.Tensor):
-    """
-    イベント、予測、GTを横に結合して1つのフレームを作成する
-    """
+                   flow_pred: torch.Tensor, 
+                   flow_gt: torch.Tensor,
+                   valid_mask: torch.Tensor):
+    
     # 1. イベント画像の作成 (H, W, 3)
     ev_img = ev_repr_to_img(ev_tensors.detach().cpu().numpy())
     ev_img = cv2.cvtColor(ev_img, cv2.COLOR_RGB2BGR)
 
+    # numpy 形式のマスク作成 (H, W)
+    mask_np = valid_mask.detach().cpu().numpy().astype(np.uint8)
+
     # 2. 予測フローのカラー化 (2, H, W) -> (H, W, 2) -> (H, W, 3)
     flow_pred_uv = flow_pred.detach().cpu().numpy().transpose(1, 2, 0)
     flow_pred_img = flow_to_image(flow_pred_uv, convert_to_bgr=True)
+    # 予測結果にもマスクを適用（無効領域を黒塗り）
+    flow_pred_img[mask_np == 0] = 0
 
     # 3. GTフローのカラー化 (2, H, W) -> (H, W, 2) -> (H, W, 3)
     flow_gt_uv = flow_gt.detach().cpu().numpy().transpose(1, 2, 0)
     flow_gt_img = flow_to_image(flow_gt_uv, convert_to_bgr=True)
+    # GTの無効領域を黒塗り
+    flow_gt_img[mask_np == 0] = 0
 
-    # 横に3つ結合 (イベント | 予測 | GT)
+    # 横に3つ結合 (イベント | 予測(Masked) | GT(Masked))
     combined_img = np.hstack((ev_img, flow_pred_img, flow_gt_img))
     return combined_img
 
@@ -76,11 +82,12 @@ def create_video_flow(data: pl.LightningDataModule,
     input_padder = InputPadderFromShape(model.in_res_hw)
     sequence_count = 0
 
-    with torch.no_grad(): # 推論時のメモリ節約
+    with torch.no_grad():
         for batch in tqdm(data_loader, desc="Processing Flow Video"):
             data_batch = batch["data"]
             ev_repr = data_batch[DataType.EV_REPR]
-            flow_gt_seq = data_batch[DataType.FLOW] # GTが存在する前提
+            flow_gt_seq = data_batch[DataType.FLOW]
+            valid_mask_seq = data_batch[DataType.VALID] 
             is_first_sample = data_batch[DataType.IS_FIRST_SAMPLE]
 
             # RNN状態のリセット
@@ -101,17 +108,24 @@ def create_video_flow(data: pl.LightningDataModule,
                 flow_pred, _, states = model.forward(ev_tensors_padded, prev_states)
                 prev_states = states
                 
+                # パディング解除のためのサイズ取得
                 orig_h, orig_w = ev_tensors.shape[-2:]
-                flow_pred = flow_pred[..., :orig_h, :orig_w]
+                
+                # クロップ処理
+                flow_pred_cropped = flow_pred[0, :, :orig_h, :orig_w]
+                flow_gt_cropped = flow_gt_seq[tidx][0].to(device)
+                valid_mask_cropped = valid_mask_seq[tidx][0].to(device)
 
-                flow_gt = flow_gt_seq[tidx][0].to(device)
-
-                img = visualize_flow(ev_tensors[0], flow_pred[0], flow_gt)
+                img = visualize_flow(
+                    ev_tensors[0], 
+                    flow_pred_cropped, 
+                    flow_gt_cropped, 
+                    valid_mask_cropped
+                )
                 video_writer.write(img)
                 
     video_writer.release()
     print(f"\nVideo successfully saved to: {output_path}")
-
 
 @hydra.main(config_path="../../config", config_name="visualize", version_base="1.2")
 def main(cfg: DictConfig):
