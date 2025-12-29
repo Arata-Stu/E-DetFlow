@@ -4,6 +4,7 @@ import re
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
+from omegaconf import OmegaConf
 
 from utils.directory import SequenceDir
 
@@ -217,39 +218,49 @@ def create_labels_from_sequence(seq: SequenceDir, args, output_base: Path = None
 # 5. 探索ロジック
 # ==========================================
 def process_dataset(root_dir: Path, args):
-    output_base = Path(args.output_dir) if args.output_dir else None
-    
-    town_dirs = sorted([d for d in root_dir.iterdir() if d.is_dir() and "Town" in d.name])
-    if not town_dirs: return
+    # --- YAML設定からパスを取得 ---
+    try:
+        conf = OmegaConf.load(args.config)
+    except Exception as e:
+        print(f"Error loading config: {e}"); return
 
-    print(f"Processing {len(town_dirs)} scenes...")
-    for town in tqdm(town_dirs, desc="Scenes"):
-        part_dirs = sorted([d for d in town.iterdir() if d.is_dir() and d.name.isdigit()])
-        
-        sequences = []
-        if not part_dirs:
-            sequences.append(SequenceDir(town))
-        else:
-            for part in part_dirs:
-                sequences.append(SequenceDir(part))
-        
-        for seq in sequences:
+    rel_paths = []
+    for split in conf.keys():
+        if conf[split] is not None:
+            rel_paths.extend(list(conf[split]))
+    unique_rel_paths = list(dict.fromkeys(rel_paths))
+
+    output_base = Path(args.output_dir) if args.output_dir else None
+
+    target_sequences = []
+    for rel_p in unique_rel_paths:
+        full_p = root_dir / rel_p
+        if full_p.exists() and full_p.is_dir():
+            seq = SequenceDir(full_p)
             if seq.dvs_dir.exists():
-                create_labels_from_sequence(seq, args, output_base)
+                target_sequences.append(seq)
+    
+    if not target_sequences:
+        print("No valid sequences found."); return
+
+    print(f"Found {len(target_sequences)} sequences from config.")
+    if args.filter_static:
+        print(f"Filter ON: (> {args.duration}s, < {args.threshold}km/h)")
+
+    for seq in tqdm(target_sequences, desc="BBox"):
+        create_labels_from_sequence(seq, args, output_base)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("input_dir", type=str, help="Dataset Root Directory")
-    parser.add_argument("--output_dir", type=str, default=None, help="Output Root Directory (Optional)")
+    parser.add_argument("input_dir", type=str)
+    parser.add_argument("--config", type=str, required=True, help="YAML split config") # 追加
+    parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--filter_static", action="store_true")
-    parser.add_argument("--threshold", type=float, default=5.0)
+    parser.add_argument("--threshold", type=float, default=0.0)
     parser.add_argument("--duration", type=float, default=1.0)
     
     args = parser.parse_args()
     input_path = Path(args.input_dir)
-    
     if input_path.exists():
         process_dataset(input_path, args)
         print("\nDone.")
-    else:
-        print(f"Error: {input_path} not found.")

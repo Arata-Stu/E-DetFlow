@@ -7,6 +7,7 @@ from pathlib import Path
 from tqdm import tqdm
 import numba
 import multiprocessing as mp
+from omegaconf import OmegaConf
 
 from utils.directory import SequenceDir
 
@@ -124,32 +125,41 @@ def _worker_task(payload):
 # ==========================================
 def process_dataset(args):
     root_dir = Path(args.input_dir)
-    town_dirs = sorted([d for d in root_dir.iterdir() if d.is_dir() and "Town" in d.name])
+    
+    # --- YAML設定からパスを取得 ---
+    try:
+        conf = OmegaConf.load(args.config)
+    except Exception as e:
+        print(f"Error loading config: {e}"); return
 
-    if not town_dirs:
-        print(f"No 'Town' directories found in {root_dir}")
-        return
+    rel_paths = []
+    for split in conf.keys():
+        if conf[split] is not None:
+            rel_paths.extend(list(conf[split]))
+    unique_rel_paths = list(dict.fromkeys(rel_paths))
 
     target_paths = []
-    print("Scanning directories...")
-    for town in town_dirs:
-        part_dirs = sorted([d for d in town.iterdir() if d.is_dir() and d.name.isdigit()])
-        if not part_dirs:
-            if (town / "dvs").exists(): target_paths.append(town)
+    print("Scanning directories based on config...")
+    for rel_p in unique_rel_paths:
+        full_p = root_dir / rel_p
+        if full_p.exists() and full_p.is_dir():
+            seq = SequenceDir(full_p)
+            if seq.dvs_dir.exists():
+                target_paths.append(full_p)
         else:
-            for part in part_dirs:
-                if (part / "dvs").exists(): target_paths.append(part)
+            print(f"[Skip] Path not found: {full_p}")
 
     total_tasks = len(target_paths)
-    if total_tasks == 0: return
+    if total_tasks == 0:
+        print("No valid sequences found."); return
 
-    num_workers = args.num_workers if args.num_workers > 0 else max(1, mp.cpu_count() - 2)
-    print(f"Workers: {num_workers} | Output: {args.output_dir or 'Same as input'}")
-
+    print(f"Total: {total_tasks} | Output: {args.output_dir or 'Same as input'}")
+    
+    # マルチプロセス実行
     task_args = [(p, args) for p in target_paths]
     ctx = mp.get_context('spawn')
-    with ctx.Pool(processes=num_workers) as pool:
-        results = list(tqdm(pool.imap_unordered(_worker_task, task_args), total=total_tasks, desc="Processing"))
+    with ctx.Pool(processes=args.num_workers if args.num_workers > 0 else None) as pool:
+        results = list(tqdm(pool.imap_unordered(_worker_task, task_args), total=total_tasks, desc="Events"))
 
     # Summary
     saved = sum(1 for r in results if r and r.startswith("Saved"))
@@ -157,8 +167,9 @@ def process_dataset(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("input_dir", type=str, help="Dataset Root Directory")
-    parser.add_argument("--output_dir", type=str, default=None, help="Output Root Directory (Optional)") # 追加
+    parser.add_argument("input_dir", type=str)
+    parser.add_argument("--config", type=str, required=True, help="YAML split config") # 追加
+    parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--downsample", action="store_true")
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=960)
@@ -167,4 +178,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if Path(args.input_dir).exists():
         process_dataset(args)
-        print("\nDone.")
