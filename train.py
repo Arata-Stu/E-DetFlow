@@ -128,6 +128,7 @@ def main(config: DictConfig):
         limit_val_batches=config.validation.limit_val_batches,
         logger=logger,
         log_every_n_steps=config.logging.train.log_every_n_steps,
+        accumulate_grad_batches=config.training.accumulate_grad_batches,
         plugins=None,
         precision=config.training.precision,
         max_epochs=config.training.max_epochs,
