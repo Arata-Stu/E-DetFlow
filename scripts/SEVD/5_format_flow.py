@@ -8,6 +8,7 @@ import multiprocessing as mp
 from pathlib import Path
 from tqdm import tqdm
 from functools import partial
+from omegaconf import OmegaConf
 
 from utils.directory import SequenceDir
 
@@ -27,14 +28,14 @@ def parse_gnss_timestamps(gnss_file_path: Path):
     if not gnss_file_path.exists():
         return None
     try:
-        with open(gnss_file_path, 'r') as f:
+        with open(gnss_file_path, 'r', encoding='utf-8') as f:
             for line in f:
                 match = pattern.search(line)
                 if match:
                     frame_id = int(match.group(1))
                     timestamp_us = int(float(match.group(2)) * 1e6)
                     frame_to_ts[frame_id] = timestamp_us
-    except Exception as e:
+    except Exception:
         return None
     return frame_to_ts
 
@@ -54,12 +55,8 @@ def natural_sort_key(s):
             for text in re.split('([0-9]+)', str(s))]
 
 def generate_mask_with_debug(flow, sem_seg_path, height, width, max_flow=400, min_flow=0.1):
-    """
-    ピクセル単位に変換済みのflowを受け取り、有効ピクセルマスクと統計を返す
-    """
     stats = {"too_small": 0, "too_large": 0, "oob": 0, "semantics": 0}
     
-    # 1. フロー強度フィルタ (ピクセル単位)
     mag = np.linalg.norm(flow, axis=2)
     mask_small = mag < min_flow
     mask_large = mag >= max_flow
@@ -68,14 +65,12 @@ def generate_mask_with_debug(flow, sem_seg_path, height, width, max_flow=400, mi
     
     mask_valid = ~(mask_small | mask_large)
     
-    # 2. 画面外フィルタ
     y_grid, x_grid = np.mgrid[0:height, 0:width]
     dest_x, dest_y = x_grid + flow[..., 0], y_grid + flow[..., 1]
     mask_oob = (dest_x < 0) | (dest_x >= width) | (dest_y < 0) | (dest_y >= height)
     stats["oob"] = np.sum(mask_oob & mask_valid)
     mask_valid &= (~mask_oob)
 
-    # 3. セマンティクスフィルタ
     if sem_seg_path and sem_seg_path.exists():
         sem_img = cv2.imread(str(sem_seg_path), cv2.IMREAD_COLOR)
         if sem_img is not None:
@@ -118,8 +113,6 @@ def aggregate_optical_flow(seq_path: Path, args):
     num_frames = len(target_list)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # 元サイズを取得 (CARLAの相対値 [-2, 2] をピクセル単位に戻すために必須)
-    # 引数で指定がない場合はデータのshapeから推測
     sample_flow = load_flow_from_npz(target_list[0][1])
     orig_h, orig_w = sample_flow.shape[:2]
     if args.orig_size:
@@ -140,13 +133,10 @@ def aggregate_optical_flow(seq_path: Path, args):
                 data = load_flow_from_npz(npz_p)
                 if data is None: data = np.zeros((orig_h, orig_w, 2), dtype=np.float32)
 
-                # --- CARLA仕様: 正規化された値をピクセル単位にスケールアップ ---
-                # data[..., 0] は x成分 (width方向), data[..., 1] は y成分 (height方向)
                 data[..., 0] *= orig_w
                 data[..., 1] *= orig_h
 
                 if args.downsample:
-                    # 解像度が半分になるので、移動量(ピクセル)も半分にする
                     data = cv2.resize(data, (final_w, final_h), interpolation=cv2.INTER_AREA) * 0.5
                 
                 mask, frame_stats, frame_max_mag = generate_mask_with_debug(data, sem_p, final_h, final_w)
@@ -171,15 +161,33 @@ def aggregate_optical_flow(seq_path: Path, args):
         return f"❌ Failed: {seq.root.name} ({e})"
 
 def process_dataset_parallel(root_dir: Path, args):
-    town_dirs = sorted([d for d in root_dir.iterdir() if d.is_dir() and "Town" in d.name])
+    # --- 修正: OmegaConfを使用してYAMLから全シーケンスをロード ---
+    try:
+        conf = OmegaConf.load(args.config)
+    except Exception as e:
+        print(f"Error loading config: {e}")
+        return
+
+    # 全てのキー(train, val, test等)からパスを抽出し、重複を除去
+    rel_paths = []
+    for split in conf.keys():
+        if conf[split] is not None:
+            rel_paths.extend(list(conf[split]))
     
+    # 順序を維持しつつ重複を排除
+    unique_rel_paths = list(dict.fromkeys(rel_paths))
+
     all_seq_paths = []
-    for town in town_dirs:
-        part_dirs = sorted([d for d in town.iterdir() if d.is_dir() and d.name.isdigit()])
-        if not part_dirs:
-            all_seq_paths.append(town)
+    for rel_p in unique_rel_paths:
+        full_p = root_dir / rel_p
+        if full_p.exists() and full_p.is_dir():
+            all_seq_paths.append(full_p)
         else:
-            all_seq_paths.extend(part_dirs)
+            print(f"[Skip] Path not found: {full_p}")
+
+    if not all_seq_paths:
+        print("No valid sequences found. Check config and input_dir.")
+        return
 
     print(f"Total sequences: {len(all_seq_paths)}")
     print(f"Settings: Downsample={args.downsample}, Workers={args.num_workers or mp.cpu_count()}")
@@ -199,6 +207,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("input_dir", type=str, help="Dataset Root Directory")
+    parser.add_argument("--config", type=str, required=True, help="Path to the split YAML file") 
     parser.add_argument("--downsample", action="store_true", help="Downsample flow by 1/2")
     parser.add_argument("--num_workers", type=int, default=None, help="Number of workers")
     parser.add_argument("--orig_size", type=int, nargs=2, metavar=('WIDTH', 'HEIGHT'), 

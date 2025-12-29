@@ -13,7 +13,9 @@ DATASET_DIR="/path/to/dataset"
 OUTPUT_DIR="/path/to/output"
 ## フィルタなし
 python3 4_format_bbox.py ${DATASET_DIR}
-python3 5_format_flow.py ${DATASET_DIR} --downsample --num_workers 10 --orig_size 1280 960
+
+python3 5_format_flow.py ${DATASET_DIR} --downsample --num_workers 10 --orig_size 1280 960 --config conf_preprocess/split_SEVD.yaml
+
 python3 6_preprocess_dataset.py ${DATASET_DIR} ${OUTPUT_DIR} \
 conf_preprocess/split_SEVD.yaml \
 conf_preprocess/representation/stacked_hist.yaml \
@@ -31,7 +33,9 @@ DATASET_DIR="/path/to/dataset"
 OUTPUT_DIR="/path/to/output"
 ## フィルタあり
 python3 4_convert_bbox.py ${DATASET_DIR} --filter_static --threshold 0.1 --duration 1.0
-python3 5_format_flow.py ${DATASET_DIR} --downsample --num_workers 10 --orig_size 1280 960
+
+python3 5_format_flow.py ${DATASET_DIR} --downsample --num_workers 10 --orig_size 1280 960 --config conf_preprocess/split_SEVD.yaml
+
 python3 6_preprocess_dataset.py ${DATASET_DIR} ${OUTPUT_DIR} \
 conf_preprocess/split_SEVD.yaml \
 conf_preprocess/representation/stacked_hist.yaml \
