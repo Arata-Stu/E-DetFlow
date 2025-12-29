@@ -320,10 +320,7 @@ class FlowReader:
             self.h5f.close()
 
     def get_nearest_data(self, target_ts_us: int):
-        """指定時刻に最も近いFlowとValid(あれば)を取得"""
         idx = np.searchsorted(self.timestamps, target_ts_us, side="left")
-        
-        # 境界チェックと最近傍探索
         if idx == 0:
             best_idx = 0
         elif idx == len(self.timestamps):
@@ -335,7 +332,6 @@ class FlowReader:
             
         flow = self.h5f['flow'][best_idx]
         valid = self.h5f['valid'][best_idx] if self.has_valid else None
-        
         return flow, valid
 
 
@@ -525,7 +521,8 @@ def write_event_representations(in_h5_file: Path, ev_out_dir: Path, dataset: str
 
 def write_synced_flow(flow_h5_path: Path, out_dir: Path, target_timestamps_us: np.ndarray):
     """
-    イベント表現のタイムスタンプに合わせて、Optical FlowとValid Maskを同期して保存する
+    イベント表現のタイムスタンプに合わせて、Optical FlowとValid Maskを同期して保存する。
+    H5Writerと同様に Blosc圧縮を適用する。
     """
     out_flow_file = out_dir / "flow_ground_truth.h5"
     if out_flow_file.exists():
@@ -548,17 +545,25 @@ def write_synced_flow(flow_h5_path: Path, out_dir: Path, target_timestamps_us: n
         out_flow_file_in_progress = out_dir / (out_flow_file.stem + '_in_progress' + out_flow_file.suffix)
         
         with h5py.File(str(out_flow_file_in_progress), 'w') as f_out:
-            dset_flow = f_out.create_dataset('flow', shape=(num_frames, h, w, c), 
-                                      dtype='float32', chunks=(1, h, w, c), 
-                                      compression="gzip", compression_opts=4)
+            dset_flow = f_out.create_dataset(
+                'flow', 
+                shape=(num_frames, h, w, c), 
+                dtype='float32', 
+                chunks=(1, h, w, c), 
+                **_blosc_opts(complevel=1, shuffle='byte')
+            )
+            
             dset_ts = f_out.create_dataset('timestamps', data=target_timestamps_us)
 
-            # Validマスクがある場合のみデータセット作成
             dset_valid = None
             if flow_reader.has_valid:
-                dset_valid = f_out.create_dataset('valid', shape=(num_frames, h, w), 
-                                          dtype='uint8', chunks=(1, h, w), 
-                                          compression="gzip", compression_opts=4)
+                dset_valid = f_out.create_dataset(
+                    'valid', 
+                    shape=(num_frames, h, w), 
+                    dtype='uint8', 
+                    chunks=(1, h, w), 
+                    **_blosc_opts(complevel=1, shuffle='byte')
+                )
 
             for i, ts in enumerate(target_timestamps_us):
                 synced_flow, synced_valid = flow_reader.get_nearest_data(ts)

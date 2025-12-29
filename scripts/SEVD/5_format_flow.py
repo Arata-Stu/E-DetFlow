@@ -4,6 +4,7 @@ import re
 import numpy as np
 import cv2
 import h5py
+import hdf5plugin
 import multiprocessing as mp
 from pathlib import Path
 from tqdm import tqdm
@@ -11,6 +12,7 @@ from functools import partial
 from omegaconf import OmegaConf
 
 from utils.directory import SequenceDir
+from utils.preprocessing import _blosc_opts  
 
 # --- 定数設定 ---
 COLORS_RGB = {
@@ -125,8 +127,23 @@ def aggregate_optical_flow(seq_path: Path, args):
 
     try:
         with h5py.File(str(tmp_path), 'w') as h5f:
-            d_flow = h5f.create_dataset('flow', (num_frames, final_h, final_w, 2), dtype='f4')
-            d_valid = h5f.create_dataset('valid', (num_frames, final_h, final_w), dtype='u1')
+            # --- 修正箇所: Blosc圧縮とチャンク設定の適用 ---
+            # 1フレーム単位でアクセスできるように chunks=(1, ...) を設定
+            d_flow = h5f.create_dataset(
+                'flow', 
+                (num_frames, final_h, final_w, 2), 
+                dtype='f4',
+                chunks=(1, final_h, final_w, 2),
+                **_blosc_opts(complevel=1, shuffle='byte')
+            )
+            d_valid = h5f.create_dataset(
+                'valid', 
+                (num_frames, final_h, final_w), 
+                dtype='u1',
+                chunks=(1, final_h, final_w),
+                **_blosc_opts(complevel=1, shuffle='byte')
+            )
+            # タイムスタンプはデータ量が小さいため圧縮なし
             d_ts = h5f.create_dataset('timestamps', (num_frames,), dtype='i8')
 
             for i, (ts, npz_p, sem_p) in enumerate(target_list):
@@ -161,20 +178,17 @@ def aggregate_optical_flow(seq_path: Path, args):
         return f"❌ Failed: {seq.root.name} ({e})"
 
 def process_dataset_parallel(root_dir: Path, args):
-    # --- 修正: OmegaConfを使用してYAMLから全シーケンスをロード ---
     try:
         conf = OmegaConf.load(args.config)
     except Exception as e:
         print(f"Error loading config: {e}")
         return
 
-    # 全てのキー(train, val, test等)からパスを抽出し、重複を除去
     rel_paths = []
     for split in conf.keys():
         if conf[split] is not None:
             rel_paths.extend(list(conf[split]))
     
-    # 順序を維持しつつ重複を排除
     unique_rel_paths = list(dict.fromkeys(rel_paths))
 
     all_seq_paths = []
