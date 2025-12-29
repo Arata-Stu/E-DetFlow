@@ -22,27 +22,33 @@ def visualize_flow(ev_tensors: torch.Tensor,
                    flow_pred: torch.Tensor, 
                    flow_gt: torch.Tensor,
                    valid_mask: torch.Tensor):
-    
+    """
+    イベント、予測、GTを横に結合。
+    valid_maskの次元が (1, H, W) の場合を考慮して squeeze 处理を行う。
+    """
     # 1. イベント画像の作成 (H, W, 3)
     ev_img = ev_repr_to_img(ev_tensors.detach().cpu().numpy())
     ev_img = cv2.cvtColor(ev_img, cv2.COLOR_RGB2BGR)
 
-    # numpy 形式のマスク作成 (H, W)
-    mask_np = valid_mask.detach().cpu().numpy().astype(np.uint8)
+    # valid_mask が (1, H, W) の場合、(H, W) に変換
+    mask_np = valid_mask.detach().cpu().numpy()
+    if mask_np.ndim == 3:
+        mask_np = mask_np.squeeze(0) 
+    mask_np = mask_np.astype(np.uint8)
 
-    # 2. 予測フローのカラー化 (2, H, W) -> (H, W, 2) -> (H, W, 3)
+    # 2. 予測フローのカラー化
     flow_pred_uv = flow_pred.detach().cpu().numpy().transpose(1, 2, 0)
     flow_pred_img = flow_to_image(flow_pred_uv, convert_to_bgr=True)
-    # 予測結果にもマスクを適用（無効領域を黒塗り）
+    
     flow_pred_img[mask_np == 0] = 0
 
-    # 3. GTフローのカラー化 (2, H, W) -> (H, W, 2) -> (H, W, 3)
+    # 3. GTフローのカラー化
     flow_gt_uv = flow_gt.detach().cpu().numpy().transpose(1, 2, 0)
     flow_gt_img = flow_to_image(flow_gt_uv, convert_to_bgr=True)
-    # GTの無効領域を黒塗り
+    
     flow_gt_img[mask_np == 0] = 0
 
-    # 横に3つ結合 (イベント | 予測(Masked) | GT(Masked))
+    # 横に結合
     combined_img = np.hstack((ev_img, flow_pred_img, flow_gt_img))
     return combined_img
 
