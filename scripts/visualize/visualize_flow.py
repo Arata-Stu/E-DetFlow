@@ -122,6 +122,13 @@ def create_video_flow(data: pl.LightningDataModule,
                 flow_gt_cropped = flow_gt_seq[tidx][0].to(device)
                 valid_mask_cropped = valid_mask_seq[tidx][0].to(device)
 
+                if tidx == 0:
+                    mask_max = valid_mask_cropped.max().item()
+                    mask_min = valid_mask_cropped.min().item()
+                    mask_mean = valid_mask_cropped.float().mean().item()
+                    print(f"DEBUG: Mask stats -> Max: {mask_max}, Min: {mask_min}, Mean: {mask_mean}")
+# ----------------
+
                 img = visualize_flow(
                     ev_tensors[0], 
                     flow_pred_cropped, 
