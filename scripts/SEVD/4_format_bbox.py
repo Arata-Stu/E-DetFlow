@@ -42,7 +42,6 @@ class MotionAnalyzer:
         """速度計算用に緯度経度のみを抽出"""
         if not file_path.exists(): return None
         data = []
-        # frame=..., timestamp=..., lat=..., lon=..., alt=...
         pattern = re.compile(r"timestamp=([0-9.]+),\s*lat=([0-9.-]+),\s*lon=([0-9.-]+)")
         try:
             with open(file_path, 'r') as f:
@@ -50,9 +49,9 @@ class MotionAnalyzer:
                     match = pattern.search(line)
                     if match:
                         data.append((
-                            float(match.group(1)), # timestamp
-                            float(match.group(2)), # lat
-                            float(match.group(3))  # lon
+                            float(match.group(1)),
+                            float(match.group(2)),
+                            float(match.group(3))
                         ))
         except Exception: return None
         if not data: return None
@@ -70,23 +69,18 @@ class MotionAnalyzer:
     @staticmethod
     def calculate_speeds(gnss_data):
         if len(gnss_data) < 2: return np.zeros(len(gnss_data))
-        
         d_dist = MotionAnalyzer.haversine_distance(
             gnss_data['lat'][:-1], gnss_data['lon'][:-1],
             gnss_data['lat'][1:], gnss_data['lon'][1:]
         )
         d_time = gnss_data['timestamp'][1:] - gnss_data['timestamp'][:-1]
-        d_time[d_time == 0] = 1e-6 # ゼロ除算防止
-        
+        d_time[d_time == 0] = 1e-6
         speed_kmh = (d_dist / d_time) * 3.6
-        # サイズ合わせのため先頭に0を追加
         return np.concatenate(([0], speed_kmh))
 
     @staticmethod
     def get_static_mask(gnss_data, threshold_kmh, min_duration_sec):
-        """速度と継続時間から静止区間のマスク(True=静止)を作成"""
         speeds = MotionAnalyzer.calculate_speeds(gnss_data)
-        
         is_candidate = speeds < threshold_kmh
         padded = np.concatenate(([False], is_candidate, [False]))
         diff = np.diff(padded.astype(int))
@@ -94,260 +88,168 @@ class MotionAnalyzer:
         ends = np.where(diff == -1)[0]
         
         final_static_mask = np.zeros_like(is_candidate, dtype=bool)
-        
         for s, e in zip(starts, ends):
             t_start = gnss_data['timestamp'][s]
             t_end = gnss_data['timestamp'][min(e - 1, len(gnss_data) - 1)]
-            duration = t_end - t_start
-            
-            if duration >= min_duration_sec:
+            if (t_end - t_start) >= min_duration_sec:
                 final_static_mask[s:e] = True
-                
         return final_static_mask
 
 # ==========================================
 # 3. ヘルパー関数: パース処理
 # ==========================================
 def parse_gnss_timestamps(gnss_file_path: Path):
-    """
-    ラベル同期用: frame -> timestamp (microseconds) の辞書を作成
-    """
     frame_to_ts = {}
     pattern = re.compile(r"frame=(\d+),\s*timestamp=([0-9.]+)")
-    
     try:
         with open(gnss_file_path, 'r') as f:
             for line in f:
                 match = pattern.search(line)
                 if match:
                     frame_id = int(match.group(1))
-                    timestamp_sec = float(match.group(2))
-                    timestamp_us = int(timestamp_sec * 1e6)
+                    timestamp_us = int(float(match.group(2)) * 1e6)
                     frame_to_ts[frame_id] = timestamp_us
     except Exception as e:
         tqdm.write(f"    [Error] GNSS読み込みエラー: {gnss_file_path.name}: {e}")
         return None
-        
     return frame_to_ts
 
 def parse_kitti_line(line, timestamp_us, misc_counter):
-    """KITTI形式の1行をパースし、Occludedフィルタを適用"""
     parts = line.strip().split(' ')
-    # --- Occlusion Filter ---
     try:
         occluded = int(parts[2])
-        # occluded 2 (largely occluded) または 3 (unknown) は除外
-        if occluded in [2, 3]:
-            return None
-    except (IndexError, ValueError):
-        pass
-    # ------------------------
+        if occluded in [2, 3]: return None
+    except (IndexError, ValueError): pass
 
     obj_type = parts[0].lower()
-    
     class_id = CLASS_MAP.get(obj_type, CLASS_MAP['misc'])
-    
-    if class_id == 3: # misc
+    if class_id == 3:
         misc_counter['count'] += 1
         misc_counter['types'].add(obj_type)
 
-    bbox_xmin = float(parts[4])
-    bbox_ymin = float(parts[5])
-    bbox_xmax = float(parts[6])
-    bbox_ymax = float(parts[7])
-
-    x = bbox_xmin
-    y = bbox_ymin
-    w = bbox_xmax - bbox_xmin
-    h = bbox_ymax - bbox_ymin
-
-    return (timestamp_us, x, y, w, h, class_id)
+    bbox_xmin, bbox_ymin = float(parts[4]), float(parts[5])
+    bbox_xmax, bbox_ymax = float(parts[6]), float(parts[7])
+    return (timestamp_us, bbox_xmin, bbox_ymin, bbox_xmax - bbox_xmin, bbox_ymax - bbox_ymin, class_id)
 
 def natural_sort_key(s):
-    return [int(text) if text.isdigit() else text.lower()
-            for text in re.split('([0-9]+)', str(s))]
+    return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', str(s))]
 
-# ==========================================
-# 4. コアロジック: ラベル生成 (SequenceDir対応)
-# ==========================================
-def create_labels_from_sequence(seq: SequenceDir, args):
-    """
-    SequenceDir を受け取り、root/labels フォルダ内にラベルnpyを生成
-    """
-    dvs_dir = seq.dvs_dir
-    labels_dir = seq.root / "labels"
-    
-    # 出力ファイル名の決定
-    filename = "labels_bbox_filtered.npy" if args.filter_static else "labels_bbox.npy"
-    output_path = labels_dir / filename
-    
-    if not dvs_dir.exists():
-        return
-    
-    labels_dir.mkdir(parents=True, exist_ok=True)
-
-    # 上書き防止（必要ならコメントアウト）
-    if output_path.exists():
-        return
-
-    gnss_path = seq.gnss_file
-    if not gnss_path.exists():
-        # GNSSファイル自体がない場合の警告
-        tqdm.write(f"[Skip] GNSS file missing in: {seq.root}")
-        return
-
-    # ラベルファイルリスト取得
-    label_files = sorted(list(dvs_dir.glob("dvs-*.txt")), key=lambda p: natural_sort_key(p.name))
-    if not label_files:
-        return
-
-    # 1. GNSS読み込み (同期用)
-    frame_map = parse_gnss_timestamps(gnss_path)
-    if not frame_map:
-        tqdm.write(f"[Skip] GNSS parsing failed or empty: {seq.root}")
-        return
-
-    # 2. KITTIラベルパース & リスト化
-    all_labels = []
-    misc_stats = {'count': 0, 'types': set()}
-    
-    # 欠落したフレームIDをリストで保持
-    missing_frames = [] 
-
-    for txt_file in label_files:
-        match = re.search(r"dvs-(\d+)\.txt", txt_file.name)
-        if not match: continue
-        
-        frame_id = int(match.group(1))
-        
-        # GNSSデータにフレームIDが存在するか確認
-        if frame_id not in frame_map:
-            missing_frames.append(frame_id) 
-            continue
-            
-        ts_us = frame_map[frame_id]
-
-        with open(txt_file, 'r') as f:
-            for line in f:
-                if not line.strip(): continue
-                label_data = parse_kitti_line(line, ts_us, misc_stats)
-                if label_data is None: continue
-                all_labels.append(label_data)
-
-    if not all_labels:
-        # ラベルが見つからなかった場合、ファイル生成をスキップしてログを出す
-        if missing_frames:
-            tqdm.write(f"🚫 [Skip Saving] Timestamps missing (valid=0): {seq.root.name}")
-            _print_debug_info(seq.root, frame_map, missing_frames)
-        else:
-            tqdm.write(f"🚫 [Skip Saving] All labels filtered out (valid=0): {seq.root.name}")
-        return
-
-    # 3. NumPy配列化
-    structured_array = np.array(all_labels, dtype=DTYPE)
-    structured_array.sort(order='t')
-
-    # ==========================================
-    # ★ フィルタリング処理
-    # ==========================================
-    original_count = len(structured_array)
-    if args.filter_static:
-        gnss_traj = MotionAnalyzer.parse_gnss_trajectory(gnss_path)
-        if gnss_traj is not None and len(gnss_traj) > 1:
-            static_mask_gnss = MotionAnalyzer.get_static_mask(
-                gnss_traj, args.threshold, args.duration
-            )
-            label_ts_sec = structured_array['t'].astype(np.float64) / 1e6
-            interp_static = np.interp(label_ts_sec, gnss_traj['timestamp'], static_mask_gnss.astype(float))
-            is_static_label = interp_static > 0.5
-            structured_array = structured_array[~is_static_label]
-
-    # 保存処理
-    if len(structured_array) == 0:
-        tqdm.write(f"🚫 [Skip Saving] All labels removed after static filtering: {seq.root.name}")
-        return
-        
-    np.save(str(output_path), structured_array)
-
-    # 結果レポート
-    filtered_count = len(structured_array)
-    status_str = "Filtered" if args.filter_static else "Raw"
-    
-    msg = f"Saved: {seq.root.name}/{filename} ({filtered_count} labels)"
-    
-    if args.filter_static:
-        removed = original_count - filtered_count
-        if removed > 0:
-            msg += f" [Rm {removed} static]"
-
-    # 欠落がある場合、詳細なデバッグ情報を表示
-    if missing_frames:
-        tqdm.write(f"\n⚠️  WARNING: Missing Timestamps detected!")
-        _print_debug_info(seq.root, frame_map, missing_frames)
-    else:
-        pass
-
-# デバッグ表示用ヘルパー関数
 def _print_debug_info(root_path, frame_map, missing_frames):
     gnss_ids = sorted(frame_map.keys())
     min_gnss, max_gnss = (min(gnss_ids), max(gnss_ids)) if gnss_ids else ("None", "None")
-    
     tqdm.write(f"  📂 Location : {root_path}")
     tqdm.write(f"  ❌ Missing  : {len(missing_frames)} frames")
     tqdm.write(f"  🔍 Details  : First 5 missing IDs -> {missing_frames[:5]} ...")
     tqdm.write(f"  📡 GNSS Data: Range [{min_gnss} ~ {max_gnss}] (Total {len(gnss_ids)} records)")
     tqdm.write("-" * 60)
 
+# ==========================================
+# 4. コアロジック: ラベル生成
+# ==========================================
+def create_labels_from_sequence(seq: SequenceDir, args, output_base: Path = None):
+    dvs_dir = seq.dvs_dir
+    
+    # --- 出力ディレクトリの決定 ---
+    if output_base:
+        # 入力ルートからの相対パスを取得して出力先に結合
+        rel_path = seq.root.relative_to(Path(args.input_dir))
+        labels_dir = output_base / rel_path / "labels"
+    else:
+        labels_dir = seq.root / "labels"
+    
+    filename = "labels_bbox_filtered.npy" if args.filter_static else "labels_bbox.npy"
+    output_path = labels_dir / filename
+    
+    if not dvs_dir.exists(): return
+    if output_path.exists(): return
+
+    gnss_path = seq.gnss_file
+    if not gnss_path.exists():
+        tqdm.write(f"[Skip] GNSS file missing in: {seq.root}")
+        return
+
+    label_files = sorted(list(dvs_dir.glob("dvs-*.txt")), key=lambda p: natural_sort_key(p.name))
+    if not label_files: return
+
+    frame_map = parse_gnss_timestamps(gnss_path)
+    if not frame_map: return
+
+    all_labels = []
+    misc_stats = {'count': 0, 'types': set()}
+    missing_frames = [] 
+
+    for txt_file in label_files:
+        match = re.search(r"dvs-(\d+)\.txt", txt_file.name)
+        if not match: continue
+        frame_id = int(match.group(1))
+        if frame_id not in frame_map:
+            missing_frames.append(frame_id)
+            continue
+        ts_us = frame_map[frame_id]
+        with open(txt_file, 'r') as f:
+            for line in f:
+                if not line.strip(): continue
+                label_data = parse_kitti_line(line, ts_us, misc_stats)
+                if label_data: all_labels.append(label_data)
+
+    if not all_labels:
+        if missing_frames: _print_debug_info(seq.root, frame_map, missing_frames)
+        return
+
+    structured_array = np.array(all_labels, dtype=DTYPE)
+    structured_array.sort(order='t')
+
+    # 静止フィルタ
+    if args.filter_static:
+        gnss_traj = MotionAnalyzer.parse_gnss_trajectory(gnss_path)
+        if gnss_traj is not None and len(gnss_traj) > 1:
+            static_mask = MotionAnalyzer.get_static_mask(gnss_traj, args.threshold, args.duration)
+            label_ts_sec = structured_array['t'].astype(np.float64) / 1e6
+            interp_static = np.interp(label_ts_sec, gnss_traj['timestamp'], static_mask.astype(float))
+            structured_array = structured_array[interp_static <= 0.5]
+
+    if len(structured_array) > 0:
+        labels_dir.mkdir(parents=True, exist_ok=True)
+        np.save(str(output_path), structured_array)
+        tqdm.write(f"Saved: {output_path}")
 
 # ==========================================
 # 5. 探索ロジック
 # ==========================================
 def process_dataset(root_dir: Path, args):
-    town_dirs = sorted([
-        d for d in root_dir.iterdir() 
-        if d.is_dir() and "Town" in d.name
-    ])
+    output_base = Path(args.output_dir) if args.output_dir else None
+    
+    town_dirs = sorted([d for d in root_dir.iterdir() if d.is_dir() and "Town" in d.name])
+    if not town_dirs: return
 
-    if not town_dirs:
-        print(f"No 'Town' directories found in {root_dir}")
-        return
-
-    print(f"Found {len(town_dirs)} scenes.")
-    if args.filter_static:
-        print(f"Filter ON: Removing stops (> {args.duration}s, < {args.threshold}km/h)")
-
+    print(f"Processing {len(town_dirs)} scenes...")
     for town in tqdm(town_dirs, desc="Scenes"):
-        part_dirs = sorted([
-            d for d in town.iterdir() 
-            if d.is_dir() and d.name.isdigit()
-        ])
+        part_dirs = sorted([d for d in town.iterdir() if d.is_dir() and d.name.isdigit()])
         
+        sequences = []
         if not part_dirs:
-            seq = SequenceDir(town)
+            sequences.append(SequenceDir(town))
+        else:
+            for part in part_dirs:
+                sequences.append(SequenceDir(part))
+        
+        for seq in sequences:
             if seq.dvs_dir.exists():
-                create_labels_from_sequence(seq, args)
-            continue
-
-        for part in part_dirs:
-            seq = SequenceDir(part)
-            create_labels_from_sequence(seq, args)
-
+                create_labels_from_sequence(seq, args, output_base)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("input_dir", type=str, help="Dataset Root Directory")
-    
-    # フィルタリング用引数
-    parser.add_argument("--filter_static", action="store_true", help="Enable static object filtering based on GNSS speed")
-    parser.add_argument("--threshold", type=float, default=0.0, help="Speed threshold in km/h (default: 5.0)")
-    parser.add_argument("--duration", type=float, default=1.0, help="Min duration in seconds to consider static (default: 1.0)")
+    parser.add_argument("--output_dir", type=str, default=None, help="Output Root Directory (Optional)")
+    parser.add_argument("--filter_static", action="store_true")
+    parser.add_argument("--threshold", type=float, default=5.0)
+    parser.add_argument("--duration", type=float, default=1.0)
     
     args = parser.parse_args()
-    
     input_path = Path(args.input_dir)
     
-    if not input_path.exists():
-        print(f"Error: Path not found: {input_path}")
-    else:
+    if input_path.exists():
         process_dataset(input_path, args)
         print("\nDone.")
+    else:
+        print(f"Error: {input_path} not found.")
