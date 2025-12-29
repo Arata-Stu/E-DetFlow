@@ -15,6 +15,7 @@ class SequenceForRandomAccess(SequenceBase):
                  dataset_type: DatasetType,
                  downsample_by_factor_2: bool,
                  only_load_end_labels: bool,
+                 use_box: bool = False,
                  use_flow: bool = False):  
         super().__init__(path=path,
                          ev_representation_name=ev_representation_name,
@@ -22,6 +23,7 @@ class SequenceForRandomAccess(SequenceBase):
                          dataset_type=dataset_type,
                          downsample_by_factor_2=downsample_by_factor_2,
                          only_load_end_labels=only_load_end_labels,
+                         use_box=use_box,
                          use_flow=use_flow)  
 
         self.start_idx_offset = None
@@ -29,12 +31,12 @@ class SequenceForRandomAccess(SequenceBase):
             if repr_idx - self.seq_len + 1 >= 0:
                 self.start_idx_offset = objframe_idx
                 break
+        
         if self.start_idx_offset is None:
-            self.start_idx_offset = len(self.label_factory)
+            factory_len = len(self.label_factory) if self.label_factory is not None else len(self.objframe_idx_2_repr_idx)
+            self.start_idx_offset = factory_len
 
-        self.length = len(self.label_factory) - self.start_idx_offset
-        assert len(self.label_factory) == len(self.objframe_idx_2_repr_idx)
-
+        self.length = len(self.objframe_idx_2_repr_idx) - self.start_idx_offset
         self._only_load_labels = False
 
     def __len__(self):
@@ -48,30 +50,41 @@ class SequenceForRandomAccess(SequenceBase):
         start_idx = end_idx - self.seq_len
         assert start_idx >= 0
 
-        # labels
+        # labels ###
         labels = list()
-        for repr_idx in range(start_idx, end_idx):
-            if self.only_load_end_labels and repr_idx < end_idx - 1:
-                labels.append(None)
-            else:
-                labels.append(self._get_labels_from_repr_idx(repr_idx))
+        if self.use_box:
+            for repr_idx in range(start_idx, end_idx):
+                if self.only_load_end_labels and repr_idx < end_idx - 1:
+                    labels.append(None)
+                else:
+                    labels.append(self._get_labels_from_repr_idx(repr_idx))
+        else:
+            labels = [None] * self.seq_len
+        
         sparse_labels = SparselyBatchedObjectLabels(sparse_object_labels_batch=labels)
         
         if self._only_load_labels:
-            return {DataType.OBJLABELS_SEQ: sparse_labels}
+            out = {}
+            if self.use_box:
+                out[DataType.OBJLABELS_SEQ] = sparse_labels
+            return out
 
-        # event representations
+        # event representations ###
         with Timer(timer_name='read ev reprs'):
             ev_repr = self._get_event_repr_torch(start_idx=start_idx, end_idx=end_idx)
 
-        # Output dictionary
+        # Output dictionary ###
         out = {
             DataType.EV_REPR: ev_repr,
-            DataType.OBJLABELS_SEQ: sparse_labels,
             DataType.IS_FIRST_SAMPLE: True,
             DataType.IS_PADDED_MASK: [False] * len(ev_repr),
         }
 
+        # boxを使う場合のみキーを追加
+        if self.use_box:
+            out[DataType.OBJLABELS_SEQ] = sparse_labels
+
+        # flow & valid mask ###
         if self.use_flow:
             # flow
             if self.has_flow:
@@ -96,7 +109,6 @@ class SequenceForRandomAccess(SequenceBase):
             out[DataType.FLOW] = flow
             out[DataType.VALID] = valid
 
-        assert len(sparse_labels) == len(ev_repr)
         return out
 
     def is_only_loading_labels(self) -> bool:

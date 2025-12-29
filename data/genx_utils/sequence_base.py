@@ -50,12 +50,14 @@ class SequenceBase(MapDataPipe):
                  dataset_type: DatasetType,
                  downsample_by_factor_2: bool,
                  only_load_end_labels: bool,
+                 use_box: bool = False,
                  use_flow:  bool = False):
         assert sequence_length >= 1
         assert path.is_dir()
         assert dataset_type in {DatasetType.GEN1, DatasetType.GEN4, DatasetType.VGA, DatasetType.SEVD}, f'{dataset_type} not implemented'
 
         self.only_load_end_labels = only_load_end_labels
+        self.use_box = use_box
         self.use_flow = use_flow
 
         ev_repr_dir = get_event_representation_dir(path=path, ev_representation_name=ev_representation_name)
@@ -75,15 +77,10 @@ class SequenceBase(MapDataPipe):
         assert self.ev_repr_file.exists(), f'{str(self.ev_repr_file)=}'
 
         self.flow_file = ev_repr_dir / 'flow_ground_truth.h5'
-        self.has_flow = self.flow_file.exists()
-
-        self.has_valid = False
-        self.flow_file = ev_repr_dir / 'flow_ground_truth.h5'
         self.has_flow = self.use_flow and self.flow_file.exists()
         
         self.has_valid = False
         if self.has_flow:
-            # Check if 'valid' dataset exists in the file
             try:
                 with h5py.File(str(self.flow_file), 'r') as h5f:
                     if 'valid' in h5f:
@@ -91,25 +88,31 @@ class SequenceBase(MapDataPipe):
             except Exception as e:
                 print(f"Warning: Failed to check valid mask in {self.flow_file}: {e}")
 
-        with Timer(timer_name='prepare labels'):
-            label_data = np.load(str(labels_dir / 'labels.npz'))
-            objframe_idx_2_label_idx = label_data['objframe_idx_2_label_idx']
-            labels = label_data['labels']
-            label_factory = ObjectLabelFactory.from_structured_array(
-                object_labels=labels,
-                objframe_idx_2_label_idx=objframe_idx_2_label_idx,
-                input_size_hw=(height, width),
-                downsample_factor=2 if downsample_by_factor_2 else None)
-            self.label_factory = label_factory
+        self.label_factory = None
+        if self.use_box:
+            with Timer(timer_name='prepare labels'):
+                label_data = np.load(str(labels_dir / 'labels.npz'))
+                objframe_idx_2_label_idx = label_data['objframe_idx_2_label_idx']
+                labels = label_data['labels']
+                label_factory = ObjectLabelFactory.from_structured_array(
+                    object_labels=labels,
+                    objframe_idx_2_label_idx=objframe_idx_2_label_idx,
+                    input_size_hw=(height, width),
+                    downsample_factor=2 if downsample_by_factor_2 else None)
+                self.label_factory = label_factory
 
         with Timer(timer_name='load objframe_idx_2_repr_idx'):
             self.objframe_idx_2_repr_idx = get_objframe_idx_2_repr_idx(
                 path=path, ev_representation_name=ev_representation_name)
+        
         with Timer(timer_name='construct repr_idx_2_objframe_idx'):
             self.repr_idx_2_objframe_idx = dict(zip(self.objframe_idx_2_repr_idx,
                                                     range(len(self.objframe_idx_2_repr_idx))))
 
     def _get_labels_from_repr_idx(self, repr_idx: int) -> Optional[ObjectLabels]:
+        if not self.use_box or self.label_factory is None:
+            return None
+        
         objframe_idx = self.repr_idx_2_objframe_idx.get(repr_idx, None)
         return None if objframe_idx is None else self.label_factory[objframe_idx]
 

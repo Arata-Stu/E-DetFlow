@@ -31,6 +31,7 @@ class SequenceDataset(Dataset):
         ev_representation_name = dataset_config.ev_repr_name
         downsample_by_factor_2 = dataset_config.downsample_by_factor_2
         only_load_end_labels = dataset_config.only_load_end_labels
+        use_box = dataset_config.use_box
         use_flow = dataset_config.use_flow
 
         augm_config = dataset_config.data_augmentation
@@ -52,6 +53,7 @@ class SequenceDataset(Dataset):
                                                 dataset_type=dataset_type,
                                                 downsample_by_factor_2=downsample_by_factor_2,
                                                 only_load_end_labels=only_load_end_labels,
+                                                use_box=use_box,
                                                 use_flow=use_flow)
 
         self.spatial_augmentor = None

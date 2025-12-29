@@ -61,6 +61,7 @@ def get_sequences(path: Path, dataset_config: DictConfig, guarantee_labels: bool
     sequence_length = dataset_config.sequence_length
     ev_representation_name = dataset_config.ev_repr_name
     downsample_by_factor_2 = dataset_config.downsample_by_factor_2
+    use_box = dataset_config.use_box
     use_flow = dataset_config.use_flow
     if dataset_config.name == 'gen1':
         dataset_type = DatasetType.GEN1
@@ -80,6 +81,7 @@ def get_sequences(path: Path, dataset_config: DictConfig, guarantee_labels: bool
             sequence_length=sequence_length,
             dataset_type=dataset_type,
             downsample_by_factor_2=downsample_by_factor_2,
+            use_box=use_box,
             use_flow=use_flow)
     return [SequenceForIter(
         path=path,
@@ -87,6 +89,7 @@ def get_sequences(path: Path, dataset_config: DictConfig, guarantee_labels: bool
         sequence_length=sequence_length,
         dataset_type=dataset_type,
         downsample_by_factor_2=downsample_by_factor_2,
+        use_box=use_box,
         use_flow=use_flow)]
 
 

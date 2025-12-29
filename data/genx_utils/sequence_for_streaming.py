@@ -47,13 +47,15 @@ class SequenceForIter(SequenceBase):
                  dataset_type: DatasetType,
                  downsample_by_factor_2: bool,
                  range_indices: Optional[Tuple[int, int]] = None,
-                 use_flow:  bool = False):
+                 use_box: bool = False,
+                 use_flow: bool = False):
         super().__init__(path=path,
                          ev_representation_name=ev_representation_name,
                          sequence_length=sequence_length,
                          dataset_type=dataset_type,
                          downsample_by_factor_2=downsample_by_factor_2,
                          only_load_end_labels=False,
+                         use_box=use_box,
                          use_flow=use_flow)
 
         with h5py.File(str(self.ev_repr_file), 'r') as h5f:
@@ -83,7 +85,8 @@ class SequenceForIter(SequenceBase):
             sequence_length: int,
             dataset_type: DatasetType,
             downsample_by_factor_2: bool,
-            use_flow:  bool = False) -> List['SequenceForIter']:
+            use_box: bool = False,
+            use_flow: bool = False) -> List['SequenceForIter']:
         
         objframe_idx_2_repr_idx = get_objframe_idx_2_repr_idx(
             path=path, ev_representation_name=ev_representation_name)
@@ -97,6 +100,7 @@ class SequenceForIter(SequenceBase):
                                 dataset_type=dataset_type,
                                 downsample_by_factor_2=downsample_by_factor_2,
                                 range_indices=range_indices,
+                                use_box=use_box,
                                 use_flow=use_flow)
             )
         return sequence_list
@@ -136,11 +140,13 @@ class SequenceForIter(SequenceBase):
         
         out = {
             DataType.EV_REPR: ev_repr,
-            DataType.OBJLABELS_SEQ: sparse_labels,
             DataType.IS_FIRST_SAMPLE: is_first_sample,
             DataType.IS_PADDED_MASK: is_padded_mask,
         }
-        # flowを使う設定の時のみキーを追加
+        
+        if self.use_box:
+            out[DataType.OBJLABELS_SEQ] = sparse_labels
+
         if self.use_flow:
             out[DataType.FLOW] = flow
             out[DataType.VALID] = valid
@@ -156,24 +162,20 @@ class SequenceForIter(SequenceBase):
 
         # sequence info ###
         sample_len = end_idx - start_idx
-        assert self.seq_len >= sample_len > 0, f'{self.seq_len=}, {sample_len=}, {start_idx=}, {end_idx=}, ' \
-                                               f'\n{self.start_indices=}\n{self.stop_indices=}'
+        assert self.seq_len >= sample_len > 0, f'{self.seq_len=}, {sample_len=}'
 
         is_first_sample = True if index == 0 else False
         is_padded_mask = [False] * sample_len
-        ###################
 
-        # event representations ###
+
         with Timer(timer_name='read ev reprs'):
             ev_repr = self._get_event_repr_torch(start_idx=start_idx, end_idx=end_idx)
         assert len(ev_repr) == sample_len
-        ###########################
 
         # flow & valid mask ###
         flow = None
         valid = None
         if self.use_flow:
-            # flow
             if self.has_flow:
                 with Timer(timer_name='read flow'):
                     flow = self._get_flow_torch(start_idx=start_idx, end_idx=end_idx)
@@ -181,7 +183,6 @@ class SequenceForIter(SequenceBase):
             else:
                 flow = [self.padding_flow] * sample_len
             
-            # valid mask
             if self.has_valid:
                 with Timer(timer_name='read valid'):
                     valid = self._get_valid_torch(start_idx=start_idx, end_idx=end_idx)
@@ -190,14 +191,18 @@ class SequenceForIter(SequenceBase):
                 ev_h, ev_w = ev_repr[0].shape[-2:]
                 ones_valid = torch.ones((1, ev_h, ev_w), dtype=torch.float32)
                 valid = [ones_valid] * sample_len
-        ##################
+
 
         # labels ###
         labels = list()
-        for repr_idx in range(start_idx, end_idx):
-            labels.append(self._get_labels_from_repr_idx(repr_idx))
+        if self.use_box:
+            for repr_idx in range(start_idx, end_idx):
+                labels.append(self._get_labels_from_repr_idx(repr_idx))
+        else:
+            # Boxを使わない場合は None で埋めておく
+            labels = [None] * sample_len
         assert len(labels) == len(ev_repr)
-        ############
+
 
         # apply padding (if necessary) ###
         if sample_len < self.seq_len:
@@ -210,17 +215,18 @@ class SequenceForIter(SequenceBase):
             if self.use_flow:
                 flow.extend([self.padding_flow] * padding_len)
                 valid.extend([self.padding_valid] * padding_len)
-        ##################################
 
-        # convert labels to sparse labels for datapipes and dataloader
         sparse_labels = SparselyBatchedObjectLabels(sparse_object_labels_batch=labels)
 
         out = {
             DataType.EV_REPR: ev_repr,
-            DataType.OBJLABELS_SEQ: sparse_labels,
             DataType.IS_FIRST_SAMPLE: is_first_sample,
             DataType.IS_PADDED_MASK: is_padded_mask,
         }
+        
+        # boxを使う場合のみキーを追加
+        if self.use_box:
+            out[DataType.OBJLABELS_SEQ] = sparse_labels
         
         # flowを使う場合のみキーを追加
         if self.use_flow:
