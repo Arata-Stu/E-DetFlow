@@ -55,12 +55,11 @@ def natural_sort_key(s):
 
 def generate_mask_with_debug(flow, sem_seg_path, height, width, max_flow=400, min_flow=0.1):
     """
-    デバッグ情報を返すように拡張したマスク生成関数
+    ピクセル単位に変換済みのflowを受け取り、有効ピクセルマスクと統計を返す
     """
-    total_pixels = height * width
     stats = {"too_small": 0, "too_large": 0, "oob": 0, "semantics": 0}
     
-    # 1. フロー強度フィルタ
+    # 1. フロー強度フィルタ (ピクセル単位)
     mag = np.linalg.norm(flow, axis=2)
     mask_small = mag < min_flow
     mask_large = mag >= max_flow
@@ -73,7 +72,7 @@ def generate_mask_with_debug(flow, sem_seg_path, height, width, max_flow=400, mi
     y_grid, x_grid = np.mgrid[0:height, 0:width]
     dest_x, dest_y = x_grid + flow[..., 0], y_grid + flow[..., 1]
     mask_oob = (dest_x < 0) | (dest_x >= width) | (dest_y < 0) | (dest_y >= height)
-    stats["oob"] = np.sum(mask_oob & mask_valid) # 強度フィルタを通った後の画面外をカウント
+    stats["oob"] = np.sum(mask_oob & mask_valid)
     mask_valid &= (~mask_oob)
 
     # 3. セマンティクスフィルタ
@@ -118,11 +117,16 @@ def aggregate_optical_flow(seq_path: Path, args):
 
     num_frames = len(target_list)
     output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 元サイズを取得 (CARLAの相対値 [-2, 2] をピクセル単位に戻すために必須)
+    # 引数で指定がない場合はデータのshapeから推測
     sample_flow = load_flow_from_npz(target_list[0][1])
     orig_h, orig_w = sample_flow.shape[:2]
+    if args.orig_size:
+        orig_w, orig_h = args.orig_size
+
     final_h, final_w = (orig_h // 2, orig_w // 2) if args.downsample else (orig_h, orig_w)
 
-    # デバッグ統計用
     agg_stats = {"too_small": 0, "too_large": 0, "oob": 0, "semantics": 0}
     max_mag_in_seq = 0.0
 
@@ -135,11 +139,17 @@ def aggregate_optical_flow(seq_path: Path, args):
             for i, (ts, npz_p, sem_p) in enumerate(target_list):
                 data = load_flow_from_npz(npz_p)
                 if data is None: data = np.zeros((orig_h, orig_w, 2), dtype=np.float32)
+
+                # --- CARLA仕様: 正規化された値をピクセル単位にスケールアップ ---
+                # data[..., 0] は x成分 (width方向), data[..., 1] は y成分 (height方向)
+                data[..., 0] *= orig_w
+                data[..., 1] *= orig_h
+
                 if args.downsample:
+                    # 解像度が半分になるので、移動量(ピクセル)も半分にする
                     data = cv2.resize(data, (final_w, final_h), interpolation=cv2.INTER_AREA) * 0.5
                 
-                # デバッグ情報を取得
-                mask, frame_stats, frame_max_mag = generate_mask_debug(data, sem_p, final_h, final_w)
+                mask, frame_stats, frame_max_mag = generate_mask_with_debug(data, sem_p, final_h, final_w)
                 
                 for k in agg_stats: agg_stats[k] += frame_stats[k]
                 max_mag_in_seq = max(max_mag_in_seq, frame_max_mag)
@@ -148,23 +158,17 @@ def aggregate_optical_flow(seq_path: Path, args):
 
         tmp_path.rename(final_path)
         
-        # 結果レポートの作成
         total_px = num_frames * final_h * final_w
-        valid_px = total_px - sum(agg_stats.values())
-        valid_pct = (valid_px / total_px) * 100
+        invalid_px = sum(agg_stats.values())
+        valid_pct = max(0, (total_px - invalid_px) / total_px * 100)
         
-        report = (f"✅ {seq.root.name} | Valid: {valid_pct:.1f}% | MaxMag: {max_mag_in_seq:.2f}\n"
+        report = (f"✅ {seq.root.name} | Valid: {valid_pct:.1f}% | MaxMag: {max_mag_in_seq:.2f}px\n"
                   f"   [Fails] Small: {agg_stats['too_small']} | OOB: {agg_stats['oob']} | Sky: {agg_stats['semantics']}")
         return report
 
     except Exception as e:
         if tmp_path.exists(): tmp_path.unlink()
         return f"❌ Failed: {seq.root.name} ({e})"
-
-def generate_mask_debug(flow, sem_p, h, w):
-    # スクリプト内で呼び出すためのエイリアス
-    return generate_mask_with_debug(flow, sem_p, h, w)
-
 
 def process_dataset_parallel(root_dir: Path, args):
     town_dirs = sorted([d for d in root_dir.iterdir() if d.is_dir() and "Town" in d.name])
@@ -177,16 +181,16 @@ def process_dataset_parallel(root_dir: Path, args):
         else:
             all_seq_paths.extend(part_dirs)
 
-    print(f"Total sequences: {len(all_seq_paths)} | Downsample: {args.downsample}")
-    print(f"Workers: {args.num_workers or mp.cpu_count()} (Method: spawn)")
+    print(f"Total sequences: {len(all_seq_paths)}")
+    print(f"Settings: Downsample={args.downsample}, Workers={args.num_workers or mp.cpu_count()}")
+    if args.orig_size:
+        print(f"Manual Scale: Width={args.orig_size[0]}, Height={args.orig_size[1]}")
 
     ctx = mp.get_context('spawn')
     func = partial(aggregate_optical_flow, args=args)
 
     with ctx.Pool(processes=args.num_workers) as pool:
-        # imap_unordered は完了したものから順に yield します
         pbar = tqdm(pool.imap_unordered(func, all_seq_paths), total=len(all_seq_paths), desc="Processing")
-        
         for res in pbar:
             tqdm.write(res)
 
@@ -196,7 +200,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("input_dir", type=str, help="Dataset Root Directory")
     parser.add_argument("--downsample", action="store_true", help="Downsample flow by 1/2")
-    parser.add_argument("--num_workers", type=int, default=None, help="Number of workers (default: CPU count)")
+    parser.add_argument("--num_workers", type=int, default=None, help="Number of workers")
+    parser.add_argument("--orig_size", type=int, nargs=2, metavar=('WIDTH', 'HEIGHT'), 
+                        help="Original image size before downsampling (e.g., --orig_size 800 600)")
     
     args = parser.parse_args()
     input_path = Path(args.input_dir)
