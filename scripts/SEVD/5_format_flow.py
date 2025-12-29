@@ -165,13 +165,10 @@ def generate_mask_debug(flow, sem_p, h, w):
     # スクリプト内で呼び出すためのエイリアス
     return generate_mask_with_debug(flow, sem_p, h, w)
 
-# --- process_dataset_parallel, main は以前と同じ ---
-# (中略)
 
 def process_dataset_parallel(root_dir: Path, args):
     town_dirs = sorted([d for d in root_dir.iterdir() if d.is_dir() and "Town" in d.name])
     
-    # 処理対象シーケンスのリストアップ
     all_seq_paths = []
     for town in town_dirs:
         part_dirs = sorted([d for d in town.iterdir() if d.is_dir() and d.name.isdigit()])
@@ -186,12 +183,12 @@ def process_dataset_parallel(root_dir: Path, args):
     ctx = mp.get_context('spawn')
     func = partial(aggregate_optical_flow, args=args)
 
-    results = []
     with ctx.Pool(processes=args.num_workers) as pool:
-        # imap_unordered で進捗を表示
-        for res in tqdm(pool.imap_unordered(func, all_seq_paths), total=len(all_seq_paths), desc="Processing"):
-            if "✅" not in res and "[Skip]" not in res:
-                tqdm.write(res) # エラーや警告があれば表示
+        # imap_unordered は完了したものから順に yield します
+        pbar = tqdm(pool.imap_unordered(func, all_seq_paths), total=len(all_seq_paths), desc="Processing")
+        
+        for res in pbar:
+            tqdm.write(res)
 
 if __name__ == "__main__":
     mp.freeze_support()
