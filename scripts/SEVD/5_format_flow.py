@@ -53,15 +53,30 @@ def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower()
             for text in re.split('([0-9]+)', str(s))]
 
-def generate_mask_with_semantics_color(flow, sem_seg_path, height, width, max_flow=400, min_flow=0.1):
-    mag = np.linalg.norm(flow, axis=2)
-    mask_valid = (mag < max_flow) & (mag >= min_flow)
+def generate_mask_with_debug(flow, sem_seg_path, height, width, max_flow=400, min_flow=0.1):
+    """
+    デバッグ情報を返すように拡張したマスク生成関数
+    """
+    total_pixels = height * width
+    stats = {"too_small": 0, "too_large": 0, "oob": 0, "semantics": 0}
     
+    # 1. フロー強度フィルタ
+    mag = np.linalg.norm(flow, axis=2)
+    mask_small = mag < min_flow
+    mask_large = mag >= max_flow
+    stats["too_small"] = np.sum(mask_small)
+    stats["too_large"] = np.sum(mask_large)
+    
+    mask_valid = ~(mask_small | mask_large)
+    
+    # 2. 画面外フィルタ
     y_grid, x_grid = np.mgrid[0:height, 0:width]
     dest_x, dest_y = x_grid + flow[..., 0], y_grid + flow[..., 1]
-    mask_oob = (dest_x >= 0) & (dest_x < width) & (dest_y >= 0) & (dest_y < height)
-    mask_valid &= mask_oob
+    mask_oob = (dest_x < 0) | (dest_x >= width) | (dest_y < 0) | (dest_y >= height)
+    stats["oob"] = np.sum(mask_oob & mask_valid) # 強度フィルタを通った後の画面外をカウント
+    mask_valid &= (~mask_oob)
 
+    # 3. セマンティクスフィルタ
     if sem_seg_path and sem_seg_path.exists():
         sem_img = cv2.imread(str(sem_seg_path), cv2.IMREAD_COLOR)
         if sem_img is not None:
@@ -70,37 +85,25 @@ def generate_mask_with_semantics_color(flow, sem_seg_path, height, width, max_fl
             for label in IGNORE_LABELS:
                 if label in COLORS_RGB:
                     is_target = np.all(sem_img == COLORS_RGB[label][::-1], axis=2)
+                    stats["semantics"] += np.sum(is_target & mask_valid)
                     mask_valid &= (~is_target)
-    return mask_valid.astype(np.uint8)
+                    
+    return mask_valid.astype(np.uint8), stats, mag.max()
 
 # --- メイン処理関数 ---
 
 def aggregate_optical_flow(seq_path: Path, args):
-    """
-    1つのシーケンスディレクトリを処理する。
-    並列ワーカーから呼び出されるため、内部でのtqdmは避けるか簡略化する。
-    """
     seq = SequenceDir(seq_path)
     output_dir = seq.root / "optical_flow_processed"
     suffix = "_ds.h5" if args.downsample else ".h5"
-    
     final_path = output_dir / f"optical_flow_synced{suffix}"
     tmp_path = final_path.with_suffix(final_path.suffix + ".tmp")
 
-    # 1. 完了チェックとゴミ掃除
-    if final_path.exists():
-        return f"[Skip] {seq.root.name}"
+    if final_path.exists(): return f"[Skip] {seq.root.name}"
+    if not seq.optical_flow_dir.exists(): return f"[Error] No flow dir: {seq.root.name}"
 
-    if tmp_path.exists():
-        tmp_path.unlink() # 途中のファイルがあれば削除して再試行
-
-    if not seq.optical_flow_dir.exists():
-        return f"[Error] No flow dir in {seq.root.name}"
-
-    # 2. 前準備（GNSS/ファイルリスト）
     frame_map = parse_gnss_timestamps(seq.gnss_file)
-    if not frame_map:
-        return f"[Error] GNSS invalid: {seq.root.name}"
+    if not frame_map: return f"[Error] GNSS invalid: {seq.root.name}"
 
     flow_files = sorted(list(seq.optical_flow_dir.glob("*.npz")), key=lambda p: natural_sort_key(p.name))
     target_list = []
@@ -111,47 +114,59 @@ def aggregate_optical_flow(seq_path: Path, args):
                 target_list.append((frame_map[f_id], npz_file, seq.sem_seg_dir / f"{f_id}.png"))
         except ValueError: continue
     
-    if not target_list:
-        return f"[Warn] No valid data: {seq.root.name}"
+    if not target_list: return f"[Warn] No valid data: {seq.root.name}"
 
-    target_list.sort(key=lambda x: x[0])
     num_frames = len(target_list)
-
-    # 3. H5ファイル書き出し (Atomic Write)
     output_dir.mkdir(parents=True, exist_ok=True)
     sample_flow = load_flow_from_npz(target_list[0][1])
-    if sample_flow is None: return f"[Error] Load failed: {seq.root.name}"
-    
     orig_h, orig_w = sample_flow.shape[:2]
     final_h, final_w = (orig_h // 2, orig_w // 2) if args.downsample else (orig_h, orig_w)
-    comp = {"compression": "gzip", "compression_opts": 4}
+
+    # デバッグ統計用
+    agg_stats = {"too_small": 0, "too_large": 0, "oob": 0, "semantics": 0}
+    max_mag_in_seq = 0.0
 
     try:
         with h5py.File(str(tmp_path), 'w') as h5f:
-            d_flow = h5f.create_dataset('flow', (num_frames, final_h, final_w, 2), dtype='f4', chunks=(1, final_h, final_w, 2), **comp)
-            d_valid = h5f.create_dataset('valid', (num_frames, final_h, final_w), dtype='u1', chunks=(1, final_h, final_w), **comp)
+            d_flow = h5f.create_dataset('flow', (num_frames, final_h, final_w, 2), dtype='f4')
+            d_valid = h5f.create_dataset('valid', (num_frames, final_h, final_w), dtype='u1')
             d_ts = h5f.create_dataset('timestamps', (num_frames,), dtype='i8')
 
             for i, (ts, npz_p, sem_p) in enumerate(target_list):
                 data = load_flow_from_npz(npz_p)
                 if data is None: data = np.zeros((orig_h, orig_w, 2), dtype=np.float32)
-                
                 if args.downsample:
                     data = cv2.resize(data, (final_w, final_h), interpolation=cv2.INTER_AREA) * 0.5
                 
-                mask = generate_mask_with_semantics_color(data, sem_p, final_h, final_w)
+                # デバッグ情報を取得
+                mask, frame_stats, frame_max_mag = generate_mask_debug(data, sem_p, final_h, final_w)
+                
+                for k in agg_stats: agg_stats[k] += frame_stats[k]
+                max_mag_in_seq = max(max_mag_in_seq, frame_max_mag)
                 
                 d_flow[i], d_valid[i], d_ts[i] = data, mask, ts
 
-        # 正常終了したらリネーム
         tmp_path.rename(final_path)
-        return f"✅ Saved: {seq.root.name}"
+        
+        # 結果レポートの作成
+        total_px = num_frames * final_h * final_w
+        valid_px = total_px - sum(agg_stats.values())
+        valid_pct = (valid_px / total_px) * 100
+        
+        report = (f"✅ {seq.root.name} | Valid: {valid_pct:.1f}% | MaxMag: {max_mag_in_seq:.2f}\n"
+                  f"   [Fails] Small: {agg_stats['too_small']} | OOB: {agg_stats['oob']} | Sky: {agg_stats['semantics']}")
+        return report
 
     except Exception as e:
         if tmp_path.exists(): tmp_path.unlink()
         return f"❌ Failed: {seq.root.name} ({e})"
 
-# --- 並列実行制御 ---
+def generate_mask_debug(flow, sem_p, h, w):
+    # スクリプト内で呼び出すためのエイリアス
+    return generate_mask_with_debug(flow, sem_p, h, w)
+
+# --- process_dataset_parallel, main は以前と同じ ---
+# (中略)
 
 def process_dataset_parallel(root_dir: Path, args):
     town_dirs = sorted([d for d in root_dir.iterdir() if d.is_dir() and "Town" in d.name])
