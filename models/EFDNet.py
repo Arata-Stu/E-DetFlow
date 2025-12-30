@@ -28,8 +28,9 @@ class EFDNet(th.nn.Module):
         in_channels = self.backbone.get_stage_dims(fpn_cfg.in_stages)
         self.fpn = build_yolox_fpn(fpn_cfg, in_channels=in_channels)
 
+        strides = self.backbone.get_strides(fpn_cfg.in_stages)
         self.flow_head = build_flow_head(head_cfg.flow, in_channels=in_channels)
-        self.det_head = build_yolox_head(head_cfg.detection, in_channels=in_channels)
+        self.det_head = build_yolox_head(head_cfg.detection, in_channels=in_channels, strides=strides)
 
     def forward_backbone(self,
                          x: th.Tensor,
