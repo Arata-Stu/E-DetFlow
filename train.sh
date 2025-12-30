@@ -18,7 +18,7 @@ NORM="norm"
 DATA_DIR="/path/to/dataset/"
 GROUP=""
 
-TRAIN_TASK="flow_and_detection" # detection, optical_flow, flow_and_detection
+TRAIN_TASK="detection" # detection, optical_flow, flow_and_detection
 
 ## train taskに応じてプロジェクト名を変更
 if [ "$TRAIN_TASK" == "detection" ]; then
