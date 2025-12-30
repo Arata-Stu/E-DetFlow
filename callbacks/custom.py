@@ -2,20 +2,19 @@ from omegaconf import DictConfig
 from lightning.pytorch.callbacks import ModelCheckpoint
 
 def get_ckpt_callback(config: DictConfig) -> ModelCheckpoint:
-    train_task = config.train_task  # 'detection' or 'optical_flow'
+    train_task = config.train_task  # 'detection', 'optical_flow', or 'flow_and_detection'
     model_name = config.model.name
 
     prefix = 'val'
     
     # タスクに応じてメトリクスとモードを切り替え
-    if train_task == 'detection':
+    if train_task in ['detection', 'flow_and_detection']:
         metric = 'AP'
         mode = 'max'  # 精度は高い方が良い
     elif train_task == 'optical_flow':
         metric = 'EPE'
         mode = 'min'  # エラー（EPE）は低い方が良い
     else:
-        # 他のタスク（例：'multitask'）がある場合はここに追加
         raise NotImplementedError(f"Task {train_task} is not supported.")
 
     ckpt_callback_monitor = prefix + '/' + metric
