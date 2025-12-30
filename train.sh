@@ -60,4 +60,4 @@ wandb.group_name=${GROUP} \
 dataset.downsample_by_factor_2=${DOWNSAMPLE} \
 +train_task=${TRAIN_TASK} \
 dataset.use_box=${USE_BOX} \
-model.use_flow=${USER_FLOW} \
+dataset.use_flow=${USER_FLOW} \

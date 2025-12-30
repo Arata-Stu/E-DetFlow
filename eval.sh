@@ -58,5 +58,5 @@ batch_size.eval=${BATCH_SIZE_PER_GPU} \
 dataset.downsample_by_factor_2=${DOWNSAMPLE} \
 checkpoint=${CKPT} \
 +train_task=${TRAIN_TASK} \
-+dataset.use_box=${USE_BOX} \
-+model.use_flow=${USER_FLOW} \
+dataset.use_box=${USE_BOX} \
+dataset.use_flow=${USER_FLOW} \
