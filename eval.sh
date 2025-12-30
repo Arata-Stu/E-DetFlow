@@ -19,7 +19,7 @@ DATA_DIR="/path/to/dataset/"
 GROUP=""
 
 CKPT="/path/to/checkpoint.ckpt"
-TRAIN_TASK="detection" # detection optical_flow
+TRAIN_TASK="detection" # detection, optical_flow, flow_and_detection
 
 if [ "$TRAIN_TASK" == "detection" ]; then
     PROJECT_PREFIX="E-Det"
@@ -27,12 +27,17 @@ if [ "$TRAIN_TASK" == "detection" ]; then
     USER_FLOW=false
 elif [ "$TRAIN_TASK" == "optical_flow" ]; then
     PROJECT_PREFIX="E-Flow"
+    USE_BOX=true 
+    USER_FLOW=true
+elif [ "$TRAIN_TASK" == "flow_and_detection" ]; then
+    PROJECT_PREFIX="E-Multi"
     USE_BOX=true
     USER_FLOW=true
 else
     echo "Unsupported TRAIN_TASK: $TRAIN_TASK"
     exit 1
 fi
+
 PROJECT="${PROJECT_PREFIX}_${MODEL}_${DATASET}"
 
 REPR_NAME="${REPR_TYPE}_dt=${DT_MS}_nbins=${T_BIN}"

@@ -11,14 +11,14 @@ DT_MS=33
 T_BIN=10
 CHANNEL=20
 SEQUENCE_LENGTH=5
-DOWNSAMPLE=true  # true false
+DOWNSAMPLE=true  
 REPR_TYPE="stacked_histogram"  # stacked_histogram voxel_grid 
 NORM="norm"
 
 DATA_DIR="/path/to/dataset/"
 GROUP=""
 
-TRAIN_TASK="detection" # detection optical_flow
+TRAIN_TASK="flow_and_detection" # detection, optical_flow, flow_and_detection
 
 ## train taskに応じてプロジェクト名を変更
 if [ "$TRAIN_TASK" == "detection" ]; then
@@ -27,12 +27,17 @@ if [ "$TRAIN_TASK" == "detection" ]; then
     USER_FLOW=false
 elif [ "$TRAIN_TASK" == "optical_flow" ]; then
     PROJECT_PREFIX="E-Flow"
+    USE_BOX=true 
+    USER_FLOW=true
+elif [ "$TRAIN_TASK" == "flow_and_detection" ]; then
+    PROJECT_PREFIX="E-Multi"
     USE_BOX=true
     USER_FLOW=true
 else
     echo "Unsupported TRAIN_TASK: $TRAIN_TASK"
     exit 1
 fi
+
 PROJECT="${PROJECT_PREFIX}_${MODEL}_${DATASET}"
 
 REPR_NAME="${REPR_TYPE}_dt=${DT_MS}_nbins=${T_BIN}"
@@ -60,4 +65,4 @@ wandb.group_name=${GROUP} \
 dataset.downsample_by_factor_2=${DOWNSAMPLE} \
 +train_task=${TRAIN_TASK} \
 dataset.use_box=${USE_BOX} \
-dataset.use_flow=${USER_FLOW} \
+dataset.use_flow=${USER_FLOW}
