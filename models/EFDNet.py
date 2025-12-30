@@ -65,7 +65,7 @@ class EFDNet(th.nn.Module):
                 if flow_loss_dict is not None:
                     losses.update(flow_loss_dict)
             else:
-                flow_out, _ = self.flow_head(fpn_features)
+                flow_out, _ = self.flow_head(fpn_features[0])
             
             outputs['flow'] = flow_out
 
