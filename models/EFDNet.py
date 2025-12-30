@@ -60,7 +60,7 @@ class EFDNet(th.nn.Module):
         with CudaTimer(device=device, timer_name="Head: Flow"):
             if self.training:
                 flow_out, flow_loss_dict = self.flow_head(
-                    fpn_features, flow_gt=flow_gt, valid_mask=valid_mask
+                    fpn_features[0], flow_gt=flow_gt, valid_mask=valid_mask
                 )
                 if flow_loss_dict is not None:
                     losses.update(flow_loss_dict)
