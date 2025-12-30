@@ -7,7 +7,7 @@ DATASET="SEVD"  # gen1 gen4 VGA SEVD
 BATCH_SIZE_PER_GPU=12
 TRAIN_WORKERS_PER_GPU=8
 EVAL_WORKERS_PER_GPU=4
-DT_MS=50
+DT_MS=33
 T_BIN=10
 CHANNEL=20
 SEQUENCE_LENGTH=5
@@ -27,7 +27,7 @@ if [ "$TRAIN_TASK" == "detection" ]; then
     USER_FLOW=false
 elif [ "$TRAIN_TASK" == "optical_flow" ]; then
     PROJECT_PREFIX="E-Flow"
-    USE_BOX=false
+    USE_BOX=true
     USER_FLOW=true
 else
     echo "Unsupported TRAIN_TASK: $TRAIN_TASK"
