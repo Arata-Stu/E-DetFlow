@@ -27,7 +27,7 @@ if [ "$TRAIN_TASK" == "detection" ]; then
     USER_FLOW=false
 elif [ "$TRAIN_TASK" == "optical_flow" ]; then
     PROJECT_PREFIX="E-Flow"
-    USE_BOX=false
+    USE_BOX=true
     USER_FLOW=true
 else
     echo "Unsupported TRAIN_TASK: $TRAIN_TASK"
