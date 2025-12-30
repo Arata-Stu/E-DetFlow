@@ -23,8 +23,12 @@ TRAIN_TASK="detection" # detection optical_flow
 ## train taskに応じてプロジェクト名を変更
 if [ "$TRAIN_TASK" == "detection" ]; then
     PROJECT_PREFIX="E-Det"
+    USE_BOX=true
+    USER_FLOW=false
 elif [ "$TRAIN_TASK" == "optical_flow" ]; then
     PROJECT_PREFIX="E-Flow"
+    USE_BOX=false
+    USER_FLOW=true
 else
     echo "Unsupported TRAIN_TASK: $TRAIN_TASK"
     exit 1
@@ -54,4 +58,6 @@ batch_size.eval=${BATCH_SIZE_PER_GPU} \
 wandb.project_name=${PROJECT} \
 wandb.group_name=${GROUP} \
 dataset.downsample_by_factor_2=${DOWNSAMPLE} \
-+train_task=${TRAIN_TASK}
++train_task=${TRAIN_TASK} \
+dataset.use_box=${USE_BOX} \
+model.use_flow=${USER_FLOW} \
