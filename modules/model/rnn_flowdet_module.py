@@ -248,7 +248,7 @@ class ModelModule(pl.LightningModule):
         flow_gt_flat = list()
         flow_mask_flat = list()
 
-        # --- 時間方向ループ ---
+        # --- 1. 時間方向ループ: 必要な特徴量とラベルの抽出 ---
         for tidx in range(sequence_len):
             collect_predictions = (tidx == sequence_len - 1) or \
                                   (self.mode_2_sampling_mode[mode] == DatasetSamplingMode.STREAM)
@@ -266,10 +266,12 @@ class ModelModule(pl.LightningModule):
                 current_labels, valid_batch_indices = sparse_obj_labels[tidx].get_valid_labels_and_batch_indices()
                 
                 if len(current_labels) > 0:
+                    # Detectionの有効サンプルがある時刻のバックボーン特徴量を保存
                     backbone_feature_selector.add_backbone_features(backbone_features=backbone_features,
                                                                     selected_indices=valid_batch_indices)
                     obj_labels_list.extend(current_labels)
                     
+                    # 対応する Flow の GT と Mask を抽出してリストに保存
                     current_flow = flow_tensor_sequence[tidx].to(dtype=self.dtype)
                     current_mask = valid_mask_sequence[tidx].to(dtype=self.dtype)
                     flow_gt_flat.append(current_flow[valid_batch_indices])
@@ -280,9 +282,12 @@ class ModelModule(pl.LightningModule):
         if len(obj_labels_list) == 0:
             return {ObjDetOutput.SKIP_VIZ: True}
 
+        # --- 2. Headの一括実行 ---
+        # batched_features は [N_valid, C, H, W] の形状
         batched_features = backbone_feature_selector.get_batched_backbone_features()
         outputs, _ = self.mdl.forward_heads(backbone_features=batched_features)
 
+        # --- 3. Detectionの評価 ---
         det_preds = outputs.get('detection', None)
         if det_preds is not None:
             pred_processed = postprocess(prediction=det_preds,
@@ -296,21 +301,27 @@ class ModelModule(pl.LightningModule):
                 self.mode_2_psee_evaluator[mode].add_labels(loaded_labels_proph)
                 self.mode_2_psee_evaluator[mode].add_predictions(yolox_preds_proph)
 
+        # --- 4. Optical Flowの一括評価 (修正の肝) ---
         flow_preds = outputs.get('flow', None)
         if flow_preds is not None and len(flow_gt_flat) > 0:
-            batched_flow_gt = torch.cat(flow_gt_flat, dim=0)
-            batched_flow_mask = torch.cat(flow_mask_flat, dim=0)
+            # 巨大な4次元テンソルに統合 [N_valid, 2, H, W]
+            batched_flow_gt = torch.cat(flow_gt_flat, dim=0).to(flow_preds.device)
+            batched_flow_mask = torch.cat(flow_mask_flat, dim=0).to(flow_preds.device)
             
-            metrics_list = []
-            for pred, gt, mask in zip(flow_preds, batched_flow_gt, batched_flow_mask):
-                m = compute_flow_metrics(pred, gt, mask)
-                metrics_list.append(m)
+            # 入力時のパディングを解除して元の解像度に戻す
+            orig_h, orig_w = flow_gt_flat[0].shape[-2:]
+            flow_preds = flow_preds[..., :orig_h, :orig_w]
+
+            # ループを回さず一括で計算 (dim=4 なのでエラーにならない)
+            metrics = compute_flow_metrics(flow_preds, batched_flow_gt, batched_flow_mask)
             
-            if len(metrics_list) > 0:
+            if metrics:
                 prefix = f'{mode_2_string[mode]}/flow'
-                for k in metrics_list[0].keys():
-                    values = torch.stack([m[k] for m in metrics_list])
-                    self.log(f'{prefix}_{k}', values.mean(), on_step=False, on_epoch=True, sync_dist=True)
+                for k, v in metrics.items():
+                    # 統合バッチ全体の平均値をログ出力
+                    # v はスカラーまたはテンソルの可能性があるため .mean() を適用
+                    val = v.mean() if isinstance(v, torch.Tensor) else v
+                    self.log(f'{prefix}_{k}', val, on_step=False, on_epoch=True, sync_dist=True)
 
         return {ObjDetOutput.SKIP_VIZ: False}
 
