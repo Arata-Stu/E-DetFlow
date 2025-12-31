@@ -38,7 +38,7 @@ else
     exit 1
 fi
 
-PROJECT="${PROJECT_PREFIX}_${MODEL}_${DATASET}"
+PROJECT="${PROJECT_PREFIX}_${MODEL}_${DATASET}_${REPR_TYPE}"
 
 REPR_NAME="${REPR_TYPE}_dt=${DT_MS}_nbins=${T_BIN}"
 
