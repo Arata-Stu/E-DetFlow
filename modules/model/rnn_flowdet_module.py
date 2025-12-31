@@ -327,40 +327,53 @@ class ModelModule(pl.LightningModule):
         psee_evaluator = self.mode_2_psee_evaluator[mode]
         batch_size = self.mode_2_batch_size[mode]
         hw_tuple = self.mode_2_hw[mode]
-        
         if psee_evaluator is None:
+            warn(f'psee_evaluator is None in {mode=}', UserWarning, stacklevel=2)
             return
-
+        assert batch_size is not None
+        assert hw_tuple is not None
         if psee_evaluator.has_data():
             metrics = psee_evaluator.evaluate_buffer(img_height=hw_tuple[0],
                                                      img_width=hw_tuple[1])
-            
+            assert metrics is not None
+
             prefix = f'{mode_2_string[mode]}/'
             step = self.trainer.global_step
             log_dict = {}
-            
             for k, v in metrics.items():
                 if isinstance(v, (int, float)):
                     value = torch.tensor(v)
                 elif isinstance(v, np.ndarray):
                     value = torch.from_numpy(v)
-                else:
+                elif isinstance(v, torch.Tensor):
                     value = v
-                log_dict[f'{prefix}{k}'] = value.to(self.device) 
-
-            # Distributed Trainingの同期
+                else:
+                    raise NotImplementedError
+                assert value.ndim == 0, f'tensor must be a scalar.\n{v=}\n{type(v)=}\n{value=}\n{type(value)=}'
+                # put them on the current device to avoid this error: https://github.com/Lightning-AI/lightning/discussions/2529
+                log_dict[f'{prefix}{k}'] = value.to(self.device)
+            # Somehow self.log does not work when we eval during the training epoch.
+            self.log_dict(log_dict, on_step=False, on_epoch=True, batch_size=batch_size, sync_dist=True)
             if dist.is_available() and dist.is_initialized():
+                # We now have to manually sync (average the metrics) across processes in case of distributed training.
+                # NOTE: This is necessary to ensure that we have the same numbers for the checkpoint metric (metadata)
+                # and wandb metric:
+                # - checkpoint callback is using the self.log function which uses global sync (avg across ranks)
+                # - wandb uses log_metrics that we reduce manually to global rank 0
                 dist.barrier()
                 for k, v in log_dict.items():
                     dist.reduce(log_dict[k], dst=0, op=dist.ReduceOp.SUM)
                     if dist.get_rank() == 0:
                         log_dict[k] /= dist.get_world_size()
-
             if self.trainer.is_global_zero:
+                # For some reason we need to increase the step by 2 to enable consistent logging in wandb here.
+                # I might not understand wandb login correctly. This works reasonably well for now.
                 add_hack = 2
                 self.logger.log_metrics(metrics=log_dict, step=step + add_hack)
 
             psee_evaluator.reset_buffer()
+        else:
+            warn(f'psee_evaluator has not data in {mode=}', UserWarning, stacklevel=2)
 
     def on_train_epoch_end(self) -> None:
         pass 
