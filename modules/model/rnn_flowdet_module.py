@@ -219,7 +219,7 @@ class ModelModule(pl.LightningModule):
 
         # ログ記録
         log_dict[f'{mode_2_string[mode]}/loss_total'] = total_loss.detach()
-        self.log_dict(log_dict, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
+        self.log_dict(log_dict, on_step=True, on_epoch=False, batch_size=batch_size, sync_dist=True)
 
         return {'loss': total_loss}
 

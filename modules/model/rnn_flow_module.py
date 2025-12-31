@@ -166,7 +166,7 @@ class ModelModule(pl.LightningModule):
 
         prefix = f'{mode_2_string[mode]}/'
         self.log_dict({f'{prefix}{k}': v for k, v in losses.items()}, 
-                      on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
+                      on_step=True, on_epoch=False, batch_size=batch_size, sync_dist=True)
 
         return output
 

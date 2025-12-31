@@ -196,7 +196,7 @@ class ModelModule(pl.LightningModule):
         # Logging
         prefix = f'{mode_2_string[mode]}/'
         log_dict = {f'{prefix}{k}': v for k, v in losses.items()}
-        self.log_dict(log_dict, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
+        self.log_dict(log_dict, on_step=True, on_epoch=False, batch_size=batch_size, sync_dist=True)
 
         if mode in self.mode_2_psee_evaluator:
             self.mode_2_psee_evaluator[mode].add_labels(loaded_labels_proph)
