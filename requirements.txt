@@ -26,6 +26,7 @@ hdf5plugin
 opencv-python
 bbox_visualizer
 plotly
+imageio
 
 # データセット関連
 pycocotools
