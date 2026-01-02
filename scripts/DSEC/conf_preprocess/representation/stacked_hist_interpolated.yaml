@@ -1,0 +1,3 @@
+name: "stacked_histogram_interpolated"
+nbins: 10
+count_cutoff: 32
