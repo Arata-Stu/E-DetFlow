@@ -14,8 +14,8 @@ REPR_TYPE="stacked_histogram"  # stacked_histogram, voxel_grid
 NORM="norm"
 
 # --- パス設定 ---
-DATA_DIR="/mnt/ssd/dataset/carla_preprocessed_accum_33ms_step_100ms/"
-CKPT_PATH="/home/metis-22/Arata/E-DetFlow/E-Flow_rvt_SEVD_histo_33ms_step_100ms/c2ha21da/checkpoints/last_epoch_000-step_10.ckpt"
+DATA_DIR="/path/to/dataset/"
+CKPT_PATH="/path/to/checkpoint/model.ckpt"
 OUTPUT_PATH="./video/output_${VIS_MODE}.mp4"
 
 # --- 可視化フラグ ---
