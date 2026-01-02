@@ -164,7 +164,8 @@ def main(cfg: DictConfig):
         output_path=cfg.output_path, 
         fps=cfg.fps, 
         num_sequence=cfg.num_sequence, 
-        dataset_mode=cfg.dataset_mode
+        dataset_mode=cfg.dataset_mode,
+        apply_mask=cfg.apply_mask
     )
 
 

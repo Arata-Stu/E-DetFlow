@@ -12,6 +12,7 @@ T_BIN=10
 CHANNEL=20
 REPR_TYPE="stacked_histogram"  # stacked_histogram, voxel_grid 
 NORM="norm"
+APPLY_MASK=true  # true or false
 
 # --- パス設定 ---
 DATA_DIR="/path/to/dataset/"
@@ -62,4 +63,5 @@ dataset.path=${DATA_DIR} \
 ckpt_path=${CKPT_PATH} \
 dataset.ev_repr_name="'${REPR_NAME}'" \
 dataset.use_flow=${USE_FLOW} \
-dataset.use_box=${USE_BOX}
+dataset.use_box=${USE_BOX} \
+apply_mask=${APPLY_MASK}
