@@ -21,7 +21,9 @@ from vis_utils import dataset2size, ev_repr_to_img, flow_to_image
 def visualize_flow(ev_tensors: torch.Tensor, 
                    flow_pred: torch.Tensor, 
                    flow_gt: torch.Tensor,
-                   valid_mask: torch.Tensor):
+                   valid_mask: torch.Tensor,
+                   apply_mask: bool = True):
+    
     """
     イベント、予測、GTを横に結合。
     valid_maskの次元が (1, H, W) の場合を考慮して squeeze 处理を行う。
@@ -40,13 +42,15 @@ def visualize_flow(ev_tensors: torch.Tensor,
     flow_pred_uv = flow_pred.detach().cpu().numpy().transpose(1, 2, 0)
     flow_pred_img = flow_to_image(flow_pred_uv, convert_to_bgr=True)
     
-    flow_pred_img[mask_np == 0] = 0
+    if apply_mask:
+        flow_pred_img[mask_np == 0] = 0
 
     # 3. GTフローのカラー化
     flow_gt_uv = flow_gt.detach().cpu().numpy().transpose(1, 2, 0)
     flow_gt_img = flow_to_image(flow_gt_uv, convert_to_bgr=True)
     
-    flow_gt_img[mask_np == 0] = 0
+    if apply_mask:
+        flow_gt_img[mask_np == 0] = 0
 
     # 横に結合
     combined_img = np.hstack((ev_img, flow_pred_img, flow_gt_img))
@@ -59,7 +63,8 @@ def create_video_flow(data: pl.LightningDataModule,
                       output_path: str, 
                       fps: int, 
                       num_sequence: int, 
-                      dataset_mode: DatasetMode):
+                      dataset_mode: DatasetMode,
+                      apply_mask: bool = True):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
@@ -126,7 +131,8 @@ def create_video_flow(data: pl.LightningDataModule,
                     ev_tensors[0], 
                     flow_pred_cropped, 
                     flow_gt_cropped, 
-                    valid_mask_cropped
+                    valid_mask_cropped,
+                    apply_mask=apply_mask
                 )
                 video_writer.write(img)
                 
