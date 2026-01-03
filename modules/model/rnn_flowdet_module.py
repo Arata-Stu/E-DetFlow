@@ -1,4 +1,4 @@
-from typing import Any, Optional, Tuple, Union, Dict
+from typing import Any, Optional, Tuple, Union, Dict, List
 from warnings import warn
 
 import numpy as np
@@ -37,6 +37,11 @@ class ModelModule(pl.LightningModule):
             Mode.TRAIN: RNNStates(),
             Mode.VAL: RNNStates(),
             Mode.TEST: RNNStates(),
+        }
+
+        self.mode_2_flow_metrics_buffer: Dict[Mode, List[Dict[str, torch.Tensor]]] = {
+            Mode.VAL: [],
+            Mode.TEST: [],
         }
 
         self.flow_loss_weight = self.full_config.training.get('flow_loss_weight', 1.0)
@@ -122,7 +127,6 @@ class ModelModule(pl.LightningModule):
 
         mode = Mode.TRAIN
         self.started_training = True
-        step = self.trainer.global_step
         
         ev_tensor_sequence = data[DataType.EV_REPR]        # [Seq, Batch, C, H, W]
         sparse_obj_labels = data[DataType.OBJLABELS_SEQ]   # List[ObjectLabels] len=Seq
@@ -134,21 +138,23 @@ class ModelModule(pl.LightningModule):
         self.mode_2_rnn_states[mode].reset(worker_id=worker_id, indices_or_bool_tensor=is_first_sample)
 
         sequence_len = len(ev_tensor_sequence)
-        assert sequence_len > 0
-        batch_size = len(sparse_obj_labels[0])
+        batch_size = ev_tensor_sequence[0].shape[0]
         
         if self.mode_2_batch_size[mode] is None:
             self.mode_2_batch_size[mode] = batch_size
 
         prev_states = self.mode_2_rnn_states[mode].get_states(worker_id=worker_id)
         
-        backbone_feature_selector = BackboneFeatureSelector()
+        # --- セレクターとバッファの初期化 ---
+        flow_selector = BackboneFeatureSelector() # Flow用 (全フレーム・全バッチ)
+        all_batch_indices = torch.arange(batch_size, device=self.device)
         
-        det_labels_flat = []    # Detectionラベル (蓄積用)
-        flow_targets_flat = []  # Flowターゲット (蓄積用)
-        flow_masks_flat = []    # Flowマスク (蓄積用)
+        det_labels_flat = []      # 有効なDetectionラベル
+        det_indices_in_flat = []  # 全サンプル中のどこにDetラベルがあるか
+        flow_targets_list = []    # Flowターゲット
+        flow_masks_list = []      # Flowマスク
 
-        # --- 時間方向ループ ---
+        # --- 1. 時間方向ループ (Backbone特徴抽出) ---
         for tidx in range(sequence_len):
             ev_tensors = ev_tensor_sequence[tidx].to(dtype=self.dtype)
             ev_tensors = self.input_padder.pad_tensor_ev_repr(ev_tensors)
@@ -160,65 +166,66 @@ class ModelModule(pl.LightningModule):
             if self.mode_2_hw[mode] is None:
                 self.mode_2_hw[mode] = tuple(ev_tensors.shape[-2:])
 
-            backbone_features, states = self.mdl.forward_backbone(x=ev_tensors,
-                                                                  previous_states=prev_states,
-                                                                  token_mask=token_masks)
+            backbone_features, states = self.mdl.forward_backbone(
+                x=ev_tensors, previous_states=prev_states, token_mask=token_masks
+            )
             prev_states = states
 
+            # A. Flow用: 全件を蓄積
+            flow_selector.add_backbone_features(backbone_features, all_batch_indices)
+            flow_targets_list.append(flow_tensor_sequence[tidx].to(dtype=self.dtype))
+            flow_masks_list.append(valid_mask_sequence[tidx].to(dtype=self.dtype))
+
+            # B. Detection用: ラベルがあるインデックスを記録
             current_labels, valid_batch_indices = sparse_obj_labels[tidx].get_valid_labels_and_batch_indices()
-            
             if len(current_labels) > 0:
-                
-                backbone_feature_selector.add_backbone_features(backbone_features=backbone_features,
-                                                                selected_indices=valid_batch_indices)
-                
+                # 全件フラット化した際のインデックス位置を特定
+                offset = tidx * batch_size
+                for v_idx in valid_batch_indices:
+                    det_indices_in_flat.append(offset + v_idx)
                 det_labels_flat.extend(current_labels)
-                current_flow = flow_tensor_sequence[tidx].to(dtype=self.dtype)
-                current_mask = valid_mask_sequence[tidx].to(dtype=self.dtype)
-                
-                selected_flow = current_flow[valid_batch_indices]  # -> [Valid_N, 2, H, W]
-                selected_mask = current_mask[valid_batch_indices]  # -> [Valid_N, 1, H, W]
-                
-                flow_targets_flat.append(selected_flow)
-                flow_masks_flat.append(selected_mask)
 
         self.mode_2_rnn_states[mode].save_states_and_detach(worker_id=worker_id, states=prev_states)
 
+        # --- 2. 共有FPNの実行 (全フレーム一括) ---
+        all_backbone_feats = flow_selector.get_batched_backbone_features()
+        all_fpn_feats = self.mdl.forward_fpn(all_backbone_feats)
+
         total_loss = torch.tensor(0.0, device=self.device, dtype=self.dtype)
         log_dict = {}
+        prefix = f'{mode_2_string[mode]}/'
 
+        # --- 3. Flow Headの計算 (全サンプル) ---
+        batched_flow_gt = torch.cat(flow_targets_list, dim=0)
+        batched_flow_mask = torch.cat(flow_masks_list, dim=0)
+        
+        _, flow_losses = self.mdl.forward_flow_head(
+            all_fpn_feats, flow_gt=batched_flow_gt, valid_mask=batched_flow_mask
+        )
+        
+        if flow_losses and 'loss_flow' in flow_losses:
+            l_flow = flow_losses['loss_flow']
+            total_loss += self.flow_loss_weight * l_flow
+            log_dict[f'{prefix}loss_flow'] = l_flow.detach()
+
+        # --- 4. Detection Headの計算 (スライスして実行) ---
         if len(det_labels_flat) > 0:
+            # FPN出力をラベルがある位置だけスライス (自動微分は維持されます)
+            # YOLOX Headが期待する各スケールの特徴マップをスライス
+            valid_fpn_feats = [f[det_indices_in_flat] for f in all_fpn_feats]
             
-            batched_backbone_features = backbone_feature_selector.get_batched_backbone_features()
-            
-            batched_det_targets = ObjectLabels.get_labels_as_batched_tensor(obj_label_list=det_labels_flat, format_='yolox')
+            batched_det_targets = ObjectLabels.get_labels_as_batched_tensor(det_labels_flat, format_='yolox')
             batched_det_targets = batched_det_targets.to(dtype=self.dtype)
+
+            _, det_losses = self.mdl.forward_det_head(valid_fpn_feats, det_targets=batched_det_targets)
             
-            batched_flow_gt = torch.cat(flow_targets_flat, dim=0)
-            batched_flow_mask = torch.cat(flow_masks_flat, dim=0)
+            if det_losses and 'loss' in det_losses:
+                l_det = det_losses['loss']
+                total_loss += self.det_loss_weight * l_det
+                log_dict[f'{prefix}loss_det'] = l_det.detach()
 
-            outputs, losses = self.mdl.forward_heads(
-                backbone_features=batched_backbone_features,
-                det_targets=batched_det_targets,
-                flow_gt=batched_flow_gt,
-                valid_mask=batched_flow_mask
-            )
-
-            if losses is not None:
-                # Detection Loss
-                if 'loss' in losses:
-                    l_det = losses['loss']
-                    total_loss += self.det_loss_weight * l_det
-                    log_dict[f'{mode_2_string[mode]}/loss_det'] = l_det.detach()
-                
-                # Flow Loss
-                if 'loss_flow' in losses:
-                    l_flow = losses['loss_flow']
-                    total_loss += self.flow_loss_weight * l_flow
-                    log_dict[f'{mode_2_string[mode]}/loss_flow'] = l_flow.detach()
-
-        # ログ記録
-        log_dict[f'{mode_2_string[mode]}/loss_total'] = total_loss.detach()
+        # --- 5. ログ記録と返却 ---
+        log_dict[f'{prefix}loss_total'] = total_loss.detach()
         self.log_dict(log_dict, on_step=True, on_epoch=False, batch_size=batch_size, sync_dist=True)
 
         return {'loss': total_loss}
@@ -236,19 +243,23 @@ class ModelModule(pl.LightningModule):
         self.mode_2_rnn_states[mode].reset(worker_id=worker_id, indices_or_bool_tensor=is_first_sample)
 
         sequence_len = len(ev_tensor_sequence)
-        batch_size = len(sparse_obj_labels[0])
+        batch_size = ev_tensor_sequence[0].shape[0]
         
         if self.mode_2_batch_size[mode] is None:
             self.mode_2_batch_size[mode] = batch_size
 
         prev_states = self.mode_2_rnn_states[mode].get_states(worker_id=worker_id)
         
-        backbone_feature_selector = BackboneFeatureSelector()
+        # --- セレクターとインデックス管理の初期化 ---
+        flow_selector = BackboneFeatureSelector() # Flow用 (全バッチ・評価対象全フレーム)
+        all_batch_indices = torch.arange(batch_size, device=self.device)
+        
         obj_labels_list = list()
-        flow_gt_flat = list()
-        flow_mask_flat = list()
+        flow_gt_list = list()
+        flow_mask_list = list()
+        det_indices_in_flat = [] # FPN出力のどこがDetection対象か
 
-        # --- 1. 時間方向ループ: 抽出処理 ---
+        # --- 1. 時間方向ループ: Backbone特徴抽出 ---
         for tidx in range(sequence_len):
             collect_predictions = (tidx == sequence_len - 1) or \
                                   (self.mode_2_sampling_mode[mode] == DatasetSamplingMode.STREAM)
@@ -263,57 +274,58 @@ class ModelModule(pl.LightningModule):
             prev_states = states
 
             if collect_predictions:
+                # A. Flow用に全バッチの特徴量とGTを保存
+                flow_selector.add_backbone_features(backbone_features=backbone_features,
+                                                    selected_indices=all_batch_indices)
+                flow_gt_list.append(flow_tensor_sequence[tidx].to(dtype=self.dtype))
+                flow_mask_list.append(valid_mask_sequence[tidx].to(dtype=self.dtype))
+
+                # B. Detection用にラベルがある箇所のインデックスを記録
                 current_labels, valid_batch_indices = sparse_obj_labels[tidx].get_valid_labels_and_batch_indices()
-                
                 if len(current_labels) > 0:
-                    backbone_feature_selector.add_backbone_features(backbone_features=backbone_features,
-                                                                    selected_indices=valid_batch_indices)
+                    # これまでに収集したFlowフレーム数に基づいてオフセットを計算
+                    current_frame_offset = (len(flow_gt_list) - 1) * batch_size
+                    for v_idx in valid_batch_indices:
+                        det_indices_in_flat.append(current_frame_offset + v_idx)
                     obj_labels_list.extend(current_labels)
-                    
-                    current_flow = flow_tensor_sequence[tidx].to(dtype=self.dtype)
-                    current_mask = valid_mask_sequence[tidx].to(dtype=self.dtype)
-                    flow_gt_flat.append(current_flow[valid_batch_indices])
-                    flow_mask_flat.append(current_mask[valid_batch_indices])
 
         self.mode_2_rnn_states[mode].save_states_and_detach(worker_id=worker_id, states=prev_states)
 
-        if len(obj_labels_list) == 0:
+        # 予測対象が1つもない場合はスキップ
+        if len(flow_gt_list) == 0:
             return {ObjDetOutput.SKIP_VIZ: True}
 
-        # --- 2. Headの一括実行 ---
-        batched_features = backbone_feature_selector.get_batched_backbone_features()
-        outputs, _ = self.mdl.forward_heads(backbone_features=batched_features)
+        # --- 2. 共有FPNの実行 (全予測対象フレーム一括) ---
+        all_backbone_feats = flow_selector.get_batched_backbone_features()
+        all_fpn_feats = self.mdl.forward_fpn(all_backbone_feats)
 
-        # --- 3. Detectionの評価器へデータ追加 ---
-        det_preds = outputs.get('detection', None)
-        if det_preds is not None:
+        # --- 3. Flowタスクの評価 ---
+        flow_preds, _ = self.mdl.forward_flow_head(all_fpn_feats)
+        
+        batched_flow_gt = torch.cat(flow_gt_list, dim=0).to(flow_preds.device)
+        batched_flow_mask = torch.cat(flow_mask_list, dim=0).to(flow_preds.device)
+        orig_h, orig_w = flow_gt_list[0].shape[-2:]
+        flow_preds = flow_preds[..., :orig_h, :orig_w]
+
+        flow_metrics = compute_flow_metrics(flow_preds, batched_flow_gt, batched_flow_mask)
+        if flow_metrics:
+            self.mode_2_flow_metrics_buffer[mode].append({k: v.detach().cpu() for k, v in flow_metrics.items()})
+
+        # --- 4. Detectionタスクの評価 (スライスして実行) ---
+        if len(obj_labels_list) > 0:
+            # ラベルがある場所だけFPN出力をスライス
+            valid_fpn_feats = [f[det_indices_in_flat] for f in all_fpn_feats]
+            det_preds, _ = self.mdl.forward_det_head(valid_fpn_feats)
+            
             pred_processed = postprocess(prediction=det_preds,
                                          num_classes=self.mdl_config.head.num_classes,
                                          conf_thre=self.mdl_config.postprocess.confidence_threshold,
                                          nms_thre=self.mdl_config.postprocess.nms_threshold)
             
             loaded_labels_proph, yolox_preds_proph = to_prophesee(obj_labels_list, pred_processed)
-            
             if self.mode_2_psee_evaluator[mode] is not None:
                 self.mode_2_psee_evaluator[mode].add_labels(loaded_labels_proph)
                 self.mode_2_psee_evaluator[mode].add_predictions(yolox_preds_proph)
-
-        # --- 4. Flowの一括評価とログ出力 ---
-        flow_preds = outputs.get('flow', None)
-        if flow_preds is not None and len(flow_gt_flat) > 0:
-            batched_flow_gt = torch.cat(flow_gt_flat, dim=0).to(flow_preds.device)
-            batched_flow_mask = torch.cat(flow_mask_flat, dim=0).to(flow_preds.device)
-            
-            orig_h, orig_w = flow_gt_flat[0].shape[-2:]
-            flow_preds = flow_preds[..., :orig_h, :orig_w]
-
-            metrics = compute_flow_metrics(flow_preds, batched_flow_gt, batched_flow_mask)
-            
-            if metrics:
-                prefix = f'{mode_2_string[mode]}/'
-                for k, v in metrics.items():
-                    val = v.mean() if isinstance(v, torch.Tensor) else v
-                    self.log(f'{prefix}{k}', val, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size, sync_dist=True)
 
         return {ObjDetOutput.SKIP_VIZ: False}
 
@@ -330,50 +342,37 @@ class ModelModule(pl.LightningModule):
         if psee_evaluator is None:
             warn(f'psee_evaluator is None in {mode=}', UserWarning, stacklevel=2)
             return
-        assert batch_size is not None
-        assert hw_tuple is not None
-        if psee_evaluator.has_data():
-            metrics = psee_evaluator.evaluate_buffer(img_height=hw_tuple[0],
-                                                     img_width=hw_tuple[1])
-            assert metrics is not None
+        
+        prefix = f'{mode_2_string[mode]}/'
+        step = self.trainer.global_step
+        log_dict = {}
 
-            prefix = f'{mode_2_string[mode]}/'
-            step = self.trainer.global_step
-            log_dict = {}
-            for k, v in metrics.items():
-                if isinstance(v, (int, float)):
-                    value = torch.tensor(v)
-                elif isinstance(v, np.ndarray):
-                    value = torch.from_numpy(v)
-                elif isinstance(v, torch.Tensor):
-                    value = v
-                else:
-                    raise NotImplementedError
-                assert value.ndim == 0, f'tensor must be a scalar.\n{v=}\n{type(v)=}\n{value=}\n{type(value)=}'
-                # put them on the current device to avoid this error: https://github.com/Lightning-AI/lightning/discussions/2529
-                log_dict[f'{prefix}{k}'] = value.to(self.device)
-            # Somehow self.log does not work when we eval during the training epoch.
+        # --- Flowのバッファがあれば集計してlog_dictに追加 ---
+        if self.mode_2_flow_metrics_buffer[mode]:
+            for k in self.mode_2_flow_metrics_buffer[mode][0].keys():
+                vals = [m[k] for m in self.mode_2_flow_metrics_buffer[mode]]
+                log_dict[f'{prefix}{k}'] = torch.stack(vals).mean().to(self.device)
+            self.mode_2_flow_metrics_buffer[mode].clear()
+
+        # --- Detectionの評価 ---
+        if psee_evaluator.has_data():
+            metrics = psee_evaluator.evaluate_buffer(img_height=hw_tuple[0], img_width=hw_tuple[1])
+            if metrics:
+                for k, v in metrics.items():
+                    if isinstance(v, (int, float)): value = torch.tensor(v)
+                    elif isinstance(v, np.ndarray): value = torch.from_numpy(v)
+                    else: value = v
+                    log_dict[f'{prefix}{k}'] = value.to(self.device)
+            psee_evaluator.reset_buffer()
+
+        if log_dict:
+            # 1. Lightning標準ログ
             self.log_dict(log_dict, on_step=False, on_epoch=True, batch_size=batch_size, sync_dist=True)
-            if dist.is_available() and dist.is_initialized():
-                # We now have to manually sync (average the metrics) across processes in case of distributed training.
-                # NOTE: This is necessary to ensure that we have the same numbers for the checkpoint metric (metadata)
-                # and wandb metric:
-                # - checkpoint callback is using the self.log function which uses global sync (avg across ranks)
-                # - wandb uses log_metrics that we reduce manually to global rank 0
-                dist.barrier()
-                for k, v in log_dict.items():
-                    dist.reduce(log_dict[k], dst=0, op=dist.ReduceOp.SUM)
-                    if dist.get_rank() == 0:
-                        log_dict[k] /= dist.get_world_size()
+            
+            # 2. WandBへの直接ログ（APとFlowを同じStepで強制同期）
             if self.trainer.is_global_zero:
-                # For some reason we need to increase the step by 2 to enable consistent logging in wandb here.
-                # I might not understand wandb login correctly. This works reasonably well for now.
                 add_hack = 2
                 self.logger.log_metrics(metrics=log_dict, step=step + add_hack)
-
-            psee_evaluator.reset_buffer()
-        else:
-            warn(f'psee_evaluator has not data in {mode=}', UserWarning, stacklevel=2)
 
     def on_train_epoch_end(self) -> None:
         pass 
@@ -381,14 +380,12 @@ class ModelModule(pl.LightningModule):
     def on_validation_epoch_end(self) -> None:
         mode = Mode.VAL
         if self.started_training and self.mode_2_psee_evaluator[mode] is not None:
-            if self.mode_2_psee_evaluator[mode].has_data():
-                self.run_psee_evaluator(mode=mode)
+            self.run_psee_evaluator(mode=mode)
 
     def on_test_epoch_end(self) -> None:
         mode = Mode.TEST
         if self.mode_2_psee_evaluator[mode] is not None:
-             if self.mode_2_psee_evaluator[mode].has_data():
-                self.run_psee_evaluator(mode=mode)
+            self.run_psee_evaluator(mode=mode)
 
     def configure_optimizers(self) -> Any:
         lr = self.train_config.learning_rate
