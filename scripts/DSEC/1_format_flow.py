@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+import sys 
+sys.path.append("../../")
+
 import os
 import argparse
 import numpy as np
@@ -11,14 +15,9 @@ from tqdm import tqdm
 from functools import partial
 from omegaconf import OmegaConf
 
-# 前処理スクリプトで定義されている圧縮設定
-def _blosc_opts(complevel=1, shuffle='byte'):
-    shuffle_map = {'none': 0, 'byte': 1, 'bit': 2}
-    return dict(
-        compression=32001, 
-        compression_opts=(0, 0, 0, 0, complevel, shuffle_map[shuffle], 5), 
-        # chunks=True
-    )
+from utils.preprocessing import _blosc_opts  
+
+
 
 def load_dsec_flow_png(path: Path):
     """DSEC仕様の16bit PNGからFlowとValidマスクを復元"""
