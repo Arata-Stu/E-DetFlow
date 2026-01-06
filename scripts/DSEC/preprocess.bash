@@ -29,10 +29,9 @@ elif [ "$MODE" == "flow" ]; then
     
     # Flowの場合のみ必要なフォーマット変換を実行
     echo "Step 1: Running 1_format_flow..."
-    python3 1_format_flow ${DATASET_DIR} ${DATASET_DIR} \
+    python3 1_format_flow ${DATASET_DIR} \
         --output_dir ${OUTPUT_DIR} \
         --num_workers ${NUM_WORKERS_FLOW} \
-        --orig_size 640 480 \
         --config ${SPLIT_YAML}
 else
     echo "Usage: ./preprocess.sh [det|flow]"
