@@ -683,38 +683,28 @@ if __name__ == '__main__':
     filter_cfg = OmegaConf.merge(OmegaConf.structured(FilterConf), filter_cfg)
     split_config = OmegaConf.load(str(args.split_yaml))
 
-    # ==========================================
-    # Ignore List (除外リスト) の読み込み
-    # ==========================================
     dirs_to_ignore = {}
     if args.ignore_yaml:
         ignore_yaml_path = Path(args.ignore_yaml)
         if ignore_yaml_path.exists():
             print(f"Loading ignore list from: {ignore_yaml_path}")
             dirs_to_ignore = OmegaConf.load(ignore_yaml_path)
-        else:
-            print(f"Warning: Ignore YAML provided but not found: {ignore_yaml_path}")
 
     dataset_input_path = Path(args.input_dir)
     target_dir = Path(args.target_dir)
 
     # --- Step 1: 解像度と対象ファイル名の決定 ---
+    base_h = dataset_2_height.get(args.dataset, 480)
+    base_w = dataset_2_width.get(args.dataset, 640)
     
-    # 基本解像度
-    base_h = dataset_2_height.get(args.dataset, 960)
-    base_w = dataset_2_width.get(args.dataset, 1280)
-    
-    # フラグによる分岐
     if args.downsample:
         height, width = base_h // 2, base_w // 2
-        # DSECの場合、集約済みファイル名はこれになる
         target_h5_filename = "events_ds.h5" 
         target_flow_filename = "optical_flow_synced_ds.h5"
     else:
         height, width = base_h, base_w
         target_h5_filename = "events.h5"
         target_flow_filename = "optical_flow_synced.h5"
-        
 
     # Factory作成
     ev_repr_factory = name_2_ev_repr_factory[config.name](config)
@@ -730,17 +720,27 @@ if __name__ == '__main__':
             continue
 
         sequence_ids = split_config[split_name]
-        split_out_dir = target_dir / split_name
-        os.makedirs(split_out_dir, exist_ok=True)
-
+        
         for sequence_id in sequence_ids:
-            seq_dir = Path(args.input_dir) / sequence_id
+            # 入力パスの探索: root/train/seq か root/test/seq か
+            train_path = dataset_input_path / "train" / sequence_id
+            test_path = dataset_input_path / "test" / sequence_id
+            
+            if train_path.exists():
+                seq_dir = train_path
+            elif test_path.exists():
+                seq_dir = test_path
+            else:
+                # 念のため直下も確認
+                seq_dir = dataset_input_path / sequence_id
+                if not seq_dir.exists():
+                    print(f"[Skip] Sequence not found in train/test: {sequence_id}")
+                    continue
 
             npy_file = seq_dir / "object_detections" / "left" / "tracks.npy"
             h5f_path = seq_dir / "events" / "left" / target_h5_filename
             flow_h5_path = seq_dir / "optical_flow_processed" / target_flow_filename
 
-            # 存在確認
             if not npy_file.exists():
                 print(f"[Skip] Labels not found: {npy_file}")
                 continue
@@ -748,7 +748,8 @@ if __name__ == '__main__':
                 print(f"[Skip] Events not found: {h5f_path}")
                 continue
 
-            out_seq_path = split_out_dir / sequence_id
+            # 出力先: target_dir / sequence_id (フラット構造)
+            out_seq_path = target_dir / sequence_id
             out_labels_path = out_seq_path / 'labels_v2'
             out_ev_repr_path = out_seq_path / 'event_representations_v2' / ev_repr_string
             
@@ -772,31 +773,20 @@ if __name__ == '__main__':
     ev_repr_delta_ts_ms = None
     if config.event_window_extraction.method == AggregationType.COUNT:
         ev_repr_num_events = config.event_window_extraction.value
-        ts_step_ev_repr_ms = config.event_window_extraction.ts_step_ev_repr_ms
     else:
         ev_repr_delta_ts_ms = config.event_window_extraction.value
-        ts_step_ev_repr_ms = config.event_window_extraction.ts_step_ev_repr_ms
+    
+    ts_step_ev_repr_ms = config.event_window_extraction.ts_step_ev_repr_ms
 
     if args.num_processes > 1:
-        chunksize = 1
-        func = partial(process_sequence,
-                       args.dataset,
-                       filter_cfg,
-                       ev_repr,
-                       ev_repr_num_events,
-                       ev_repr_delta_ts_ms,
-                       ts_step_ev_repr_ms)
-        
+        func = partial(process_sequence, args.dataset, filter_cfg, ev_repr,
+                       ev_repr_num_events, ev_repr_delta_ts_ms, ts_step_ev_repr_ms)
         with get_context('spawn').Pool(args.num_processes) as pool:
             with tqdm(total=len(seq_data_list), desc='sequences') as pbar:
-                for _ in pool.imap_unordered(func, iterable=seq_data_list, chunksize=chunksize):
+                for _ in pool.imap_unordered(func, iterable=seq_data_list):
                     pbar.update()
     else:
         for entry in tqdm(seq_data_list, desc='sequences'):
-            process_sequence(dataset=args.dataset,
-                             filter_cfg=filter_cfg,
-                             event_representation=ev_repr,
-                             ev_repr_num_events=ev_repr_num_events,
-                             ev_repr_delta_ts_ms=ev_repr_delta_ts_ms,
-                             ts_step_ev_repr_ms=ts_step_ev_repr_ms,
-                             sequence_data=entry)
+            process_sequence(dataset=args.dataset, filter_cfg=filter_cfg, event_representation=ev_repr,
+                             ev_repr_num_events=ev_repr_num_events, ev_repr_delta_ts_ms=ev_repr_delta_ts_ms,
+                             ts_step_ev_repr_ms=ts_step_ev_repr_ms, sequence_data=entry)

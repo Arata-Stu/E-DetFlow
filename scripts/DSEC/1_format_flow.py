@@ -11,7 +11,7 @@ from tqdm import tqdm
 from functools import partial
 from omegaconf import OmegaConf
 
-# 前処理スクリプトで定義されている圧縮設定に合わせる
+# 前処理スクリプトで定義されている圧縮設定
 def _blosc_opts(complevel=1, shuffle='byte'):
     shuffle_map = {'none': 0, 'byte': 1, 'bit': 2}
     return dict(
@@ -20,14 +20,10 @@ def _blosc_opts(complevel=1, shuffle='byte'):
         chunks=True
     )
 
-# ==========================================
-# 1. ヘルパー関数群
-# ==========================================
 def load_dsec_flow_png(path: Path):
     """DSEC仕様の16bit PNGからFlowとValidマスクを復元"""
     try:
         img = imageio.imread(path).astype(np.float32)
-        # 1ch(R): x, 2ch(G): y, 3ch(B): valid
         flow_x = (img[..., 0] - 2**15) / 128.0
         flow_y = (img[..., 1] - 2**15) / 128.0
         valid = (img[..., 2] > 0).astype(np.uint8)
@@ -37,17 +33,15 @@ def load_dsec_flow_png(path: Path):
         print(f"Error loading {path}: {e}")
         return None, None
 
-# ==========================================
-# 2. メイン処理ロジック (単一シーケンス)
-# ==========================================
 def process_dsec_flow_sequence(seq_path: Path, args):
     seq_name = seq_path.name
     
-    # 出力パスの設定
+    # 出力パスの設定: train/test階層を無視し、シーケンス名直下に保存
     if args.output_dir:
-        rel_path = seq_path.relative_to(Path(args.input_dir))
-        output_dir = Path(args.output_dir) / rel_path / "optical_flow_processed"
+        output_root = Path(args.output_dir) / seq_name
+        output_dir = output_root / "optical_flow_processed"
     else:
+        # args.output_dirが指定されない場合は、入力シーケンス内に作成
         output_dir = seq_path / "optical_flow_processed"
     
     filename = "optical_flow_synced_ds.h5" if args.downsample else "optical_flow_synced.h5"
@@ -57,16 +51,13 @@ def process_dsec_flow_sequence(seq_path: Path, args):
     if final_path.exists():
         return f" [Skip] {seq_name}"
 
-    # DSECの構造チェック (forward flowを使用)
     flow_dir = seq_path / "flow" / "forward"
     ts_path = seq_path / "flow" / "forward_timestamps.txt"
     
     if not flow_dir.exists() or not ts_path.exists():
         return f" [Error] Missing flow/ts: {seq_name}"
 
-    # ファイルリストとタイムスタンプの取得
     png_files = sorted(list(flow_dir.glob("*.png")))
-    # DSECのTSは [start_us, end_us] だが、前処理スクリプトは1次元(end_us)を期待する
     try:
         raw_ts = np.loadtxt(ts_path, delimiter=',', dtype=np.int64)
         target_timestamps = raw_ts[:, 1] # end_us を使用
@@ -79,7 +70,6 @@ def process_dsec_flow_sequence(seq_path: Path, args):
     num_frames = len(png_files)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # 最初の一枚で解像度確認
     sample_flow, _ = load_dsec_flow_png(png_files[0])
     if sample_flow is None: return f" [Error] Load Failed: {seq_name}"
     
@@ -110,9 +100,6 @@ def process_dsec_flow_sequence(seq_path: Path, args):
         if tmp_path.exists(): tmp_path.unlink()
         return f"❌ Failed: {seq_name} ({str(e)})"
 
-# ==========================================
-# 3. データセット全体処理ロジック
-# ==========================================
 def process_dataset(args):
     root_dir = Path(args.input_dir)
     try: 
@@ -123,15 +110,27 @@ def process_dataset(args):
     # YAMLからシーケンスパスを抽出
     rel_paths = []
     for split in conf.keys():
-        if conf[split] is not None: rel_paths.extend(list(conf[split]))
+        if conf[split] is not None:
+            rel_paths.extend(list(conf[split]))
     unique_rel_paths = list(dict.fromkeys(rel_paths))
 
-    all_seq_paths = [root_dir / p for p in unique_rel_paths if (root_dir / p).exists()]
+    # train/test 構造に対応したパス探索
+    all_seq_paths = []
+    for p in unique_rel_paths:
+        path_in_train = root_dir / "train" / p
+        path_in_test = root_dir / "test" / p
+        
+        if path_in_train.exists():
+            all_seq_paths.append(path_in_train)
+        elif path_in_test.exists():
+            all_seq_paths.append(path_in_test)
+        else:
+            print(f"⚠️ Sequence not found in train/test: {p}")
     
     if not all_seq_paths:
         print("No valid sequences found."); return
 
-    print(f"Total sequences: {len(all_seq_paths)}")
+    print(f"Total sequences found: {len(all_seq_paths)}")
     num_procs = args.num_workers if args.num_workers is not None else mp.cpu_count()
     print(f"Running with {num_procs} processes")
 
@@ -147,12 +146,12 @@ def process_dataset(args):
 
 if __name__ == "__main__":
     mp.freeze_support()
-    parser = argparse.ArgumentParser(description="Convert DSEC Flow PNGs to Synced H5 for Preprocessing")
-    parser.add_argument("input_dir", type=str, help="Root directory of DSEC dataset")
+    parser = argparse.ArgumentParser(description="Convert DSEC Flow PNGs to Synced H5")
+    parser.add_argument("input_dir", type=str, help="Root directory (containing train/ and test/)")
     parser.add_argument("--config", type=str, required=True, help="YAML split config")
-    parser.add_argument("--output_dir", type=str, default=None, help="Output Root Directory") 
-    parser.add_argument("--downsample", action="store_true", help="1/2 downsampling and scaled magnitude")
-    parser.add_argument("--num_workers", type=int, default=None, help="Number of parallel processes")
+    parser.add_argument("--output_dir", type=str, default=None, help="Output Root (Flat structure)") 
+    parser.add_argument("--downsample", action="store_true", help="1/2 downsampling")
+    parser.add_argument("--num_workers", type=int, default=None, help="Number of workers")
     
     args = parser.parse_args()
     if Path(args.input_dir).exists():
