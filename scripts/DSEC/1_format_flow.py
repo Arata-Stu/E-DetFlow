@@ -17,7 +17,7 @@ def _blosc_opts(complevel=1, shuffle='byte'):
     return dict(
         compression=32001, 
         compression_opts=(0, 0, 0, 0, complevel, shuffle_map[shuffle], 5), 
-        chunks=True
+        # chunks=True
     )
 
 def load_dsec_flow_png(path: Path):
