@@ -30,7 +30,6 @@ elif [ "$MODE" == "flow" ]; then
     # Flowの場合のみ必要なフォーマット変換を実行
     echo "Step 1: Running 1_format_flow..."
     python3 1_format_flow ${DATASET_DIR} \
-        --output_dir ${OUTPUT_DIR} \
         --num_workers ${NUM_WORKERS_FLOW} \
         --config ${SPLIT_YAML}
 else

@@ -721,6 +721,10 @@ if __name__ == '__main__':
 
         sequence_ids = split_config[split_name]
         
+        # YAMLの構造に合わせて split ごとのディレクトリを作成
+        split_out_root = target_dir / split_name
+        split_out_root.mkdir(parents=True, exist_ok=True)
+
         for sequence_id in sequence_ids:
             # 入力パスの探索: root/train/seq か root/test/seq か
             train_path = dataset_input_path / "train" / sequence_id
@@ -731,10 +735,9 @@ if __name__ == '__main__':
             elif test_path.exists():
                 seq_dir = test_path
             else:
-                # 念のため直下も確認
                 seq_dir = dataset_input_path / sequence_id
                 if not seq_dir.exists():
-                    print(f"[Skip] Sequence not found in train/test: {sequence_id}")
+                    print(f"[Skip] Sequence not found: {sequence_id}")
                     continue
 
             npy_file = seq_dir / "object_detections" / "left" / "tracks.npy"
@@ -748,8 +751,8 @@ if __name__ == '__main__':
                 print(f"[Skip] Events not found: {h5f_path}")
                 continue
 
-            # 出力先: target_dir / sequence_id (フラット構造)
-            out_seq_path = target_dir / sequence_id
+            # --- ここを修正：出力先を split_name (train/val/test) の階層に従わせる ---
+            out_seq_path = split_out_root / sequence_id
             out_labels_path = out_seq_path / 'labels_v2'
             out_ev_repr_path = out_seq_path / 'event_representations_v2' / ev_repr_string
             
