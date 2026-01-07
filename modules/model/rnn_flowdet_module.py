@@ -318,7 +318,7 @@ class ModelModule(pl.LightningModule):
             det_preds, _ = self.mdl.forward_det_head(valid_fpn_feats)
             
             pred_processed = postprocess(prediction=det_preds,
-                                         num_classes=self.mdl_config.head.num_classes,
+                                         num_classes=self.mdl_config.head.detection.num_classes,
                                          conf_thre=self.mdl_config.postprocess.confidence_threshold,
                                          nms_thre=self.mdl_config.postprocess.nms_threshold)
             

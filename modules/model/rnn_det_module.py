@@ -175,7 +175,7 @@ class ModelModule(pl.LightningModule):
             obj_labels = obj_labels[-batch_size:]
 
         pred_processed = postprocess(prediction=predictions,
-                                     num_classes=self.mdl_config.head.num_classes,
+                                     num_classes=self.mdl_config.head.detection.num_classes,
                                      conf_thre=self.mdl_config.postprocess.confidence_threshold,
                                      nms_thre=self.mdl_config.postprocess.nms_threshold)
 
@@ -263,7 +263,7 @@ class ModelModule(pl.LightningModule):
 
 
         pred_processed = postprocess(prediction=predictions,
-                                     num_classes=self.mdl_config.head.num_classes,
+                                     num_classes=self.mdl_config.head.detection.num_classes,
                                      conf_thre=self.mdl_config.postprocess.confidence_threshold,
                                      nms_thre=self.mdl_config.postprocess.nms_threshold)
 
