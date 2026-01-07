@@ -9,7 +9,7 @@ from data.utils.spatial import get_dataloading_hw
 dataset2num_classes = {
     'gen1': 2,
     'gen4': 3,
-    'VGA': 3,
+    'VGA': 8,
     'SEVD': 4,
 }
 def dynamically_modify_train_config(config: DictConfig):
@@ -48,7 +48,7 @@ def dynamically_modify_train_config(config: DictConfig):
                 print(f'{backbone_name=} not available')
                 raise NotImplementedError
             num_classes = dataset2num_classes[dataset_name]
-            mdl_cfg.head.num_classes = num_classes
+            mdl_cfg.head.detection.num_classes = num_classes
             print(f'Set {num_classes=} for detection head')
             
         elif mdl_name == 'YOLOX_LSTM':
@@ -56,7 +56,7 @@ def dynamically_modify_train_config(config: DictConfig):
             mdl_hw = (320, 320) if dataset_name == 'gen1' else (480, 640)
             backbone_cfg.in_res_hw = mdl_hw
             num_classes = dataset2num_classes[dataset_name]
-            mdl_cfg.head.num_classes = num_classes
+            mdl_cfg.head.detection.num_classes = num_classes
             pass
 
         else:
