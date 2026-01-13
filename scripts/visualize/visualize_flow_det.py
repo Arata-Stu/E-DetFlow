@@ -1,4 +1,8 @@
 import os
+import sys
+sys.path.append('../../')
+
+import os
 import cv2
 import torch
 import numpy as np

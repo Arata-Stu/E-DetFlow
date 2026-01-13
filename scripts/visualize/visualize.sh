@@ -37,7 +37,7 @@ elif [ "$VIS_MODE" == "detection" ]; then
     USE_BOX=true
 elif [ "$VIS_MODE" == "combined" ]; then
     # 以前作成した統合可視化スクリプト名
-    SCRIPT_NAME="visualize_combined.py" 
+    SCRIPT_NAME="visualize_flow_det.py" 
     TRAIN_TASK="flow_and_detection"
     USE_FLOW=true
     USE_BOX=true
