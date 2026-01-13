@@ -11,6 +11,7 @@ from tqdm import tqdm
 from omegaconf import DictConfig, OmegaConf
 import hydra
 
+from config.modifier import dynamically_modify_train_config
 from data.utils.types import DatasetMode, DataType
 from models.detection.yolox.utils import postprocess
 from modules.utils.detection import RNNStates
@@ -137,6 +138,18 @@ def create_combined_video(data: pl.LightningDataModule,
 
 @hydra.main(config_path="../../config", config_name="visualize")
 def main(cfg: DictConfig):
+    # 設定の解決
+    dynamically_modify_train_config(cfg)
+    OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
+    
+    print('------ Configuration ------')
+    print(OmegaConf.to_yaml(cfg))
+    print('---------------------------')
+
+    # 出力先ディレクトリの作成
+    dir_name = os.path.dirname(cfg.output_path)
+    if dir_name and not os.path.exists(dir_name):
+        os.makedirs(dir_name, exist_ok=True)
     data = fetch_data_module(cfg)
     model = fetch_model_module(cfg)
     create_combined_video(data, model, cfg.ckpt_path, cfg.output_path, cfg.fps, cfg.num_sequence)
