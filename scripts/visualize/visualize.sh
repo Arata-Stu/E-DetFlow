@@ -15,6 +15,8 @@ REPR_TYPE="stacked_histogram"  # stacked_histogram, voxel_grid
 NORM="norm"
 APPLY_MASK=true  # true or false
 
+DATASET_MODE='test' # 'train' or 'val' or 'test'
+
 # --- パス設定 ---
 DATA_DIR="/path/to/dataset/"
 CKPT_PATH="/path/to/checkpoint/model.ckpt"
@@ -60,7 +62,6 @@ echo "Flags: Flow=${USE_FLOW}, Box=${USE_BOX}"
 echo "------------------------------------------------"
 
 # --- 実行コマンド ---
-# 注意: モデルが EFDNet の場合、model=... の指定を config に合わせて変更してください
 CUDA_VISIBLE_DEVICES=${GPU_IDS} python3 ${SCRIPT_NAME} \
 model=${MODEL} \
 +train_task=${TRAIN_TASK} \
@@ -69,6 +70,7 @@ gt=${SHOW_GT} \
 pred=${SHOW_PRED} \
 dataset=${DATASET} \
 dataset.path=${DATA_DIR} \
+dataset_mode="${DATASET_MODE}" \
 ckpt_path=${CKPT_PATH} \
 dataset.ev_repr_name="'${REPR_NAME}'" \
 dataset.use_flow=${USE_FLOW} \

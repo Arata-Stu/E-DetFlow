@@ -54,7 +54,8 @@ def create_combined_video(data: pl.LightningDataModule,
                           ckpt_path: str, 
                           output_path: str, 
                           fps: int, 
-                          num_sequence: int):
+                          num_sequence: int,
+                          dataset_mode: str):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     orig_size = dataset2size[data.dataset_name] # (W, H)
@@ -63,16 +64,23 @@ def create_combined_video(data: pl.LightningDataModule,
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     video_writer = cv2.VideoWriter(output_path, fourcc, fps, video_size)
 
+    if dataset_mode == "test":
+        print("Setting up dataset for TEST mode...")
+        data.setup('test')
+        data_loader = data.test_dataloader()
+    elif dataset_mode == "val" or dataset_mode == "validate":
+        print("Setting up dataset for VALIDATION mode...")
+        data.setup('validate')
+        data_loader = data.val_dataloader()
+    else:
+        raise ValueError(f"Unsupported dataset_mode: {dataset_mode}. Use 'test' or 'val'.")
+
     # チェックポイントのロード
     if ckpt_path:
         ckpt = torch.load(ckpt_path, map_location=device)
         model_module.load_state_dict(ckpt['state_dict'])
     model_module.to(device).eval()
     
-    # データローダーの準備 (Validationを使用)
-    data.setup('validate')
-    data_loader = data.val_dataloader()
-
     rnn_state = RNNStates()
     input_padder = InputPadderFromShape(model_module.in_res_hw)
     num_classes = len(set(dataset2labelmap[data.dataset_name].values()))
@@ -152,7 +160,7 @@ def main(cfg: DictConfig):
         os.makedirs(dir_name, exist_ok=True)
     data = fetch_data_module(cfg)
     model = fetch_model_module(cfg)
-    create_combined_video(data, model, cfg.ckpt_path, cfg.output_path, cfg.fps, cfg.num_sequence)
+    create_combined_video(data, model, cfg.ckpt_path, cfg.output_path, cfg.fps, cfg.num_sequence, dataset_mode=cfg.dataset_mode)
 
 if __name__ == '__main__':
     main()
