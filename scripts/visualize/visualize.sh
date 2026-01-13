@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # --- 実行モード設定 ---
-VIS_MODE="flow" # flow or detection
+# オプション: flow, detection, combined
+VIS_MODE="combined" 
 
 # --- 基本設定 ---
 GPU_IDS=0  
@@ -21,7 +22,7 @@ OUTPUT_PATH="./video/output_${VIS_MODE}.mp4"
 
 # --- 可視化フラグ ---
 SHOW_GT=true
-SHOW_PRED=false
+SHOW_PRED=true # 統合モードでは通常両方見たいので true 推奨
 
 # --- モードに応じた条件分岐 ---
 if [ "$VIS_MODE" == "flow" ]; then
@@ -34,8 +35,14 @@ elif [ "$VIS_MODE" == "detection" ]; then
     TRAIN_TASK="detection"
     USE_FLOW=false
     USE_BOX=true
+elif [ "$VIS_MODE" == "combined" ]; then
+    # 以前作成した統合可視化スクリプト名
+    SCRIPT_NAME="visualize_combined.py" 
+    TRAIN_TASK="flow_and_detection"
+    USE_FLOW=true
+    USE_BOX=true
 else
-    echo "Invalid VIS_MODE: $VIS_MODE. Use 'flow' or 'detection'."
+    echo "Invalid VIS_MODE: $VIS_MODE. Use 'flow', 'detection', or 'combined'."
     exit 1
 fi
 
@@ -45,13 +52,15 @@ if [ "$REPR_TYPE" == "voxel_grid" ]; then
     REPR_NAME="${REPR_NAME}_${NORM}"
 fi
 
-echo "------------------------------------------"
+echo "------------------------------------------------"
 echo "Mode: ${VIS_MODE} -> Running ${SCRIPT_NAME}"
 echo "Model: ${MODEL} | Task: ${TRAIN_TASK}"
 echo "Checkpoint: ${CKPT_PATH}"
-echo "------------------------------------------"
+echo "Flags: Flow=${USE_FLOW}, Box=${USE_BOX}"
+echo "------------------------------------------------"
 
 # --- 実行コマンド ---
+# 注意: モデルが EFDNet の場合、model=... の指定を config に合わせて変更してください
 CUDA_VISIBLE_DEVICES=${GPU_IDS} python3 ${SCRIPT_NAME} \
 model=${MODEL} \
 +train_task=${TRAIN_TASK} \
